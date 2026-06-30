@@ -1,0 +1,71 @@
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment and secrets
+.env*
+**/.env*
+!**/.env.example
+*.env
+*.local
+.local/
+secrets/
+secret/
+*.secret
+*.secrets
+*.token
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Cookies, browser auth, and session state
+storage_state.json
+storage_state*.json
+cookies.json
+cookies*.json
+*cookie*
+playwright/.auth/
+.auth/
+
+# Local databases and app-generated state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+orchestrator/data/
+
+# Logs
+logs/
+*.log
+
+# Python/build/test artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# JavaScript dependencies/build artifacts
+node_modules/
+
+# Reference-only source dumps and external repos
+_reference/
+
+# Local-only Git history backups
+.git-history-backup*/

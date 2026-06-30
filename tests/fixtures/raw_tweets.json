@@ -1,0 +1,30 @@
+[
+  {
+    "id": "1234567890",
+    "text": "A useful post",
+    "createdAt": "Wed May 20 14:30:00 +0000 2026",
+    "replyCount": 2,
+    "retweetCount": 3,
+    "likeCount": 7,
+    "quoteCount": 1,
+    "viewCount": "99",
+    "author": {
+      "username": "example_user",
+      "name": "Example User"
+    }
+  },
+  {
+    "id": "1234567890",
+    "text": "Duplicate",
+    "createdAt": "2026-05-20T14:30:00Z",
+    "author": {
+      "username": "example_user",
+      "name": "Example User"
+    }
+  },
+  {
+    "id": "missing-author",
+    "text": "Malformed",
+    "createdAt": "2026-05-20T14:30:00Z"
+  }
+]

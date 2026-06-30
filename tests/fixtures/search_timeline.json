@@ -1,0 +1,62 @@
+{
+  "data": {
+    "search_by_raw_query": {
+      "search_timeline": {
+        "timeline": {
+          "instructions": [
+            {
+              "type": "TimelineAddEntries",
+              "entries": [
+                {
+                  "entryId": "tweet-1234567890",
+                  "content": {
+                    "itemContent": {
+                      "tweet_results": {
+                        "result": {
+                          "rest_id": "1234567890",
+                          "core": {
+                            "user_results": {
+                              "result": {
+                                "rest_id": "42",
+                                "core": {
+                                  "screen_name": "example_user",
+                                  "name": "Example User"
+                                },
+                                "legacy": {
+                                  "screen_name": "example_user",
+                                  "name": "Example User"
+                                }
+                              }
+                            }
+                          },
+                          "legacy": {
+                            "created_at": "Wed May 20 14:30:00 +0000 2026",
+                            "full_text": "A sanitized fixture post",
+                            "reply_count": 2,
+                            "retweet_count": 3,
+                            "favorite_count": 7,
+                            "quote_count": 1
+                          },
+                          "views": {
+                            "count": "99"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "entryId": "cursor-bottom",
+                  "content": {
+                    "cursorType": "Bottom",
+                    "value": "sanitized-cursor"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

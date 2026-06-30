@@ -1,0 +1,11 @@
+{
+  "name": "x-search-read-only-backend",
+  "version": "0.1.0",
+  "description": "Dependency-free, read-only SearchTimeline backend for x-api",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
