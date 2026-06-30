@@ -42,17 +42,25 @@ YouTube search. In that mode, `yt-api` only checks recent videos from those chan
 
 ## Run
 
+Start all HTTP services from one terminal:
+
+```bash
+python -m net_razor_dev
+```
+
+Then configure Hermes, or another MCP host, to launch the MCP server separately over stdio:
+
+```bash
+python -m net_razor_mcp
+```
+
+For debugging, each HTTP service can still be started separately:
+
 ```bash
 python -m net_razor_orchestrator
 python -m x_api
 python -m hn_api
 python -m yt_api
-```
-
-MCP runs over stdio:
-
-```bash
-python -m net_razor_mcp
 ```
 
 ## Quick Checks

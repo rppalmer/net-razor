@@ -32,6 +32,7 @@ where = [
     "platforms/hn-api/src",
     "platforms/yt-api/src",
     "mcp-server/src",
+    "dev-tools/src",
 ]
 
 [tool.setuptools.package-data]
