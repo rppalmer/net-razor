@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 AuthStatus = Literal["valid", "expired", "unknown"]
 SearchMode = Literal["latest", "top"]
 SourceName = Literal["x", "hn", "yt"]
-ResearchSourceName = Literal["x", "hn"]
+ResearchSourceName = Literal["x", "hn", "yt"]
 
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
@@ -76,6 +76,7 @@ class YTSearchRequest(BaseModel):
     days: int = Field(default=1, ge=1, le=3650)
     since: date | None = None
     until: date | None = None
+    order: Literal["relevance", "date", "view_count"] = "relevance"
     fetch_transcripts: bool = True
     transcript_limit: int = Field(default=3, ge=0, le=10)
     languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
@@ -122,7 +123,7 @@ class EvidenceItem(BaseModel):
     source: SourceName
     source_backend: str
     source_id: str
-    item_type: Literal["post"] = "post"
+    item_type: Literal["post", "video", "transcript"] = "post"
     canonical_url: str
     title: str | None = None
     text: str

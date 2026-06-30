@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI
 from net_razor_shared.logging import configure_json_logging, query_hash, request_logging_middleware
 from net_razor_shared.models import (
     ServiceErrorItem,
@@ -24,6 +24,8 @@ from yt_api.client import (
     segments_from_result,
 )
 from yt_api.config import Settings, get_settings
+from yt_api.search_client import HttpYouTubeSearchClient, YouTubeSearchClient
+from yt_api.search_service import YouTubeSearchService
 from yt_api.video_id import extract_video_id
 
 _TRANSCRIPT_ERROR_TYPES = {
@@ -38,6 +40,9 @@ class HealthResponse(BaseModel):
     service: str = "yt-api"
     ready: bool = True
     auth_required: bool = False
+    search_configured: bool
+    search_mode: str
+    configured_channel_count: int
 
 
 class CapabilitiesResponse(BaseModel):
@@ -46,9 +51,11 @@ class CapabilitiesResponse(BaseModel):
     read_only: bool = True
     direct_api: bool = True
     auth_required: bool = False
-    research_source: bool = False
+    research_source: bool
     transcript_available: bool = True
-    search_available: bool = False
+    search_available: bool
+    search_mode: str
+    configured_channel_count: int
     inputs: list[str] = Field(default_factory=lambda: ["video_id", "youtube_url"])
     default_languages: list[str] = Field(default_factory=lambda: ["en"])
     time_filter: str = "applies_to_search_not_direct_transcript_fetch"
@@ -79,11 +86,29 @@ def _error_response(
 def create_app(
     settings: Settings | None = None,
     client: TranscriptClient | None = None,
+    search_client: YouTubeSearchClient | None = None,
 ) -> FastAPI:
     service_settings = settings or get_settings()
     configure_json_logging(service_settings.log_level)
     transcript_client = client or YouTubeTranscriptClient(service_settings.proxy_url_value)
+    youtube_search_client = search_client
+    if youtube_search_client is None and service_settings.youtube_search_configured:
+        youtube_search_client = HttpYouTubeSearchClient(
+            api_key=service_settings.youtube_api_key_value or "",
+            base_url=service_settings.youtube_api_base_url,
+            timeout_seconds=service_settings.request_timeout_seconds,
+            channel_ids=(
+                service_settings.youtube_channel_id_list
+                if service_settings.yt_search_mode == "channels"
+                else None
+            ),
+        )
     logger = logging.getLogger("yt_api")
+    search_service = YouTubeSearchService(
+        search_client=youtube_search_client,
+        transcript_client=transcript_client,
+        logger=logging.getLogger("yt_api.search"),
+    )
 
     app = FastAPI(
         title="YT API",
@@ -94,44 +119,33 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        return HealthResponse()
+        return HealthResponse(
+            search_configured=service_settings.youtube_search_configured,
+            search_mode=service_settings.yt_search_mode,
+            configured_channel_count=len(service_settings.youtube_channel_id_list),
+        )
 
     @app.get("/capabilities", response_model=CapabilitiesResponse)
     async def capabilities() -> CapabilitiesResponse:
-        return CapabilitiesResponse()
+        return CapabilitiesResponse(
+            research_source=service_settings.youtube_search_configured,
+            search_available=service_settings.youtube_search_configured,
+            search_mode=service_settings.yt_search_mode,
+            configured_channel_count=len(service_settings.youtube_channel_id_list),
+        )
 
-    @app.post(
-        "/search",
-        response_model=YTSearchResponse,
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    )
+    @app.post("/search", response_model=YTSearchResponse)
     async def search(body: YTSearchRequest) -> YTSearchResponse:
-        logger.warning(
-            "handled_error query_hash=%s error_type=not_implemented",
+        result = await search_service.search(body)
+        logger.info(
+            "search_completed query_hash=%s item_count=%s candidates_seen=%s "
+            "transcript_fetches_attempted=%s",
             query_hash(body.query),
+            len(result.items),
+            result.candidates_seen,
+            result.transcript_fetches_attempted,
         )
-        return YTSearchResponse(
-            source="yt",
-            query_used=body.query,
-            items=[],
-            errors=[
-                ServiceErrorItem(
-                    type="not_implemented",
-                    message=(
-                        "YouTube search/discovery is owned by yt-api but is not implemented yet"
-                    ),
-                    details={
-                        "future_policy": "rank candidates before fetching low-volume transcripts",
-                        "max_results": body.max_results,
-                        "days": body.days,
-                        "fetch_transcripts": body.fetch_transcripts,
-                        "transcript_limit": body.transcript_limit,
-                    },
-                )
-            ],
-            candidates_seen=0,
-            transcript_fetches_attempted=0,
-        )
+        return result
 
     @app.post("/transcript", response_model=YouTubeTranscriptResponse)
     async def transcript(body: YouTubeTranscriptRequest) -> YouTubeTranscriptResponse:

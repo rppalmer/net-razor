@@ -31,7 +31,7 @@ def test_planner_builds_source_specific_queries() -> None:
     request = ResearchRequest(
         topic="Python agents",
         days=14,
-        sources=["x", "hn"],
+        sources=["x", "hn", "yt"],
         max_results_per_source=10,
     )
 
@@ -43,7 +43,14 @@ def test_planner_builds_source_specific_queries() -> None:
     assert plan.x_search.days == 14
     assert plan.hn_search is not None
     assert plan.hn_search.days == 14
-    assert plan.planned_queries == {"x": "Python agents", "hn": "Python agents"}
+    assert plan.yt_search is not None
+    assert plan.yt_search.days == 14
+    assert plan.yt_search.transcript_limit == 3
+    assert plan.planned_queries == {
+        "x": "Python agents",
+        "hn": "Python agents",
+        "yt": "Python agents",
+    }
 
 
 def test_ranking_scores_and_applies_per_author_cap() -> None:

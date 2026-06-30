@@ -8,7 +8,8 @@ from net_razor_orchestrator.config import Settings
 from net_razor_orchestrator.hn_client import HNApiResult
 from net_razor_orchestrator.main import create_app
 from net_razor_orchestrator.x_client import XApiResult
-from net_razor_shared.models import HNSearchRequest, XSearchRequest
+from net_razor_orchestrator.yt_client import YTApiResult
+from net_razor_shared.models import HNSearchRequest, XSearchRequest, YTSearchRequest
 
 
 class FakeXClient:
@@ -31,6 +32,17 @@ class FakeHNClient:
     async def search(self, request: HNSearchRequest) -> HNApiResult:
         self.requests.append(request)
         return HNApiResult(status_code=self.status_code, response_json=self.response_json)
+
+
+class FakeYTClient:
+    def __init__(self, response_json: dict[str, Any], status_code: int = 200) -> None:
+        self.response_json = response_json
+        self.status_code = status_code
+        self.requests: list[YTSearchRequest] = []
+
+    async def search(self, request: YTSearchRequest) -> YTApiResult:
+        self.requests.append(request)
+        return YTApiResult(status_code=self.status_code, response_json=self.response_json)
 
 
 async def request(app, method: str, path: str, **kwargs) -> httpx.Response:
@@ -138,9 +150,10 @@ async def test_services_reports_yt_as_direct_platform_not_research_source(tmp_pa
     services = {service["name"]: service for service in response.json()["services"]}
     assert services["yt"]["backend"] == "yt-api"
     assert services["yt"]["direct_api"] is True
-    assert services["yt"]["research_source"] is False
+    assert services["yt"]["research_source"] is True
     assert services["yt"]["transcript_available"] is True
-    assert services["yt"]["search_available"] is False
+    assert services["yt"]["search_available"] is True
+    assert services["yt"]["requires_api_key"] is True
     assert services["yt"]["discovery_owner"] == "yt-api"
 
 
@@ -212,13 +225,50 @@ def hn_success_response() -> dict[str, Any]:
     }
 
 
-async def test_research_calls_x_and_hn_from_planner(tmp_path: Path) -> None:
+def yt_success_response() -> dict[str, Any]:
+    return {
+        "source": "yt",
+        "query_used": "Python agents",
+        "items": [
+            {
+                "source": "yt",
+                "source_backend": "yt-api",
+                "source_id": "dQw4w9WgXcQ",
+                "item_type": "transcript",
+                "canonical_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "title": "Python agents demo",
+                "text": "A useful transcript",
+                "author": {
+                    "handle": "UCexample",
+                    "display_name": "Example Channel",
+                },
+                "published_at": "2026-05-22T14:30:00Z",
+                "engagement": {
+                    "likes": 5,
+                    "reposts": 0,
+                    "replies": 2,
+                    "quotes": 0,
+                    "views": 100,
+                },
+                "query_used": "Python agents",
+                "raw": {"id": {"videoId": "dQw4w9WgXcQ"}},
+            }
+        ],
+        "errors": [],
+        "candidates_seen": 1,
+        "transcript_fetches_attempted": 1,
+    }
+
+
+async def test_research_calls_x_hn_and_yt_from_planner(tmp_path: Path) -> None:
     x_client = FakeXClient(x_success_response())
     hn_client = FakeHNClient(hn_success_response())
+    yt_client = FakeYTClient(yt_success_response())
     app = create_app(
         settings_for(tmp_path / "runs.db"),
         x_client=x_client,
         hn_client=hn_client,
+        yt_client=yt_client,
     )
 
     response = await request(
@@ -228,7 +278,7 @@ async def test_research_calls_x_and_hn_from_planner(tmp_path: Path) -> None:
         json={
             "topic": "Python agents",
             "days": 14,
-            "sources": ["x", "hn"],
+            "sources": ["x", "hn", "yt"],
             "max_results_per_source": 10,
         },
     )
@@ -237,11 +287,13 @@ async def test_research_calls_x_and_hn_from_planner(tmp_path: Path) -> None:
     packet = response.json()
     assert packet["sources"]["x"]["items_found"] == 1
     assert packet["sources"]["hn"]["items_found"] == 1
-    assert {item["source"] for item in packet["items"]} == {"x", "hn"}
+    assert packet["sources"]["yt"]["items_found"] == 1
+    assert {item["source"] for item in packet["items"]} == {"x", "hn", "yt"}
     assert all(item["score"] > 0 for item in packet["items"])
     assert packet["debug"]["planned_queries"] == {
         "x": "Python agents",
         "hn": "Python agents",
+        "yt": "Python agents",
     }
     assert hn_client.requests[0].model_dump(mode="json") == {
         "query": "Python agents",
@@ -250,4 +302,15 @@ async def test_research_calls_x_and_hn_from_planner(tmp_path: Path) -> None:
         "since": None,
         "until": None,
         "sort": "latest",
+    }
+    assert yt_client.requests[0].model_dump(mode="json") == {
+        "query": "Python agents",
+        "max_results": 10,
+        "days": 14,
+        "since": None,
+        "until": None,
+        "order": "relevance",
+        "fetch_transcripts": True,
+        "transcript_limit": 3,
+        "languages": ["en"],
     }

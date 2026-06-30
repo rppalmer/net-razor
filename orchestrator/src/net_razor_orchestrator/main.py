@@ -9,6 +9,7 @@ from net_razor_orchestrator.hn_client import HNApiClient, HttpHNApiClient
 from net_razor_orchestrator.service import ResearchService
 from net_razor_orchestrator.storage import RunStorage
 from net_razor_orchestrator.x_client import HttpXApiClient, XApiClient
+from net_razor_orchestrator.yt_client import HttpYTApiClient, YTApiClient
 
 
 def create_app(
@@ -16,6 +17,7 @@ def create_app(
     storage: RunStorage | None = None,
     x_client: XApiClient | None = None,
     hn_client: HNApiClient | None = None,
+    yt_client: YTApiClient | None = None,
 ) -> FastAPI:
     service_settings = settings or get_settings()
     configure_json_logging(service_settings.log_level)
@@ -31,7 +33,16 @@ def create_app(
         service_settings.hn_api_base_url,
         service_settings.request_timeout_seconds,
     )
-    research_service = ResearchService(run_storage, source_client, hn_source_client)
+    yt_source_client = yt_client or HttpYTApiClient(
+        service_settings.yt_api_base_url,
+        service_settings.request_timeout_seconds,
+    )
+    research_service = ResearchService(
+        run_storage,
+        source_client,
+        hn_source_client,
+        yt_source_client,
+    )
 
     app = FastAPI(
         title="Net-Razor Orchestrator",
@@ -80,9 +91,10 @@ def create_app(
                     "base_url": service_settings.yt_api_base_url,
                     "direct_api": True,
                     "auth_required": False,
-                    "research_source": False,
+                    "research_source": True,
                     "transcript_available": True,
-                    "search_available": False,
+                    "search_available": True,
+                    "requires_api_key": True,
                     "time_filter": "applies_to_search_not_direct_transcript_fetch",
                     "discovery_owner": "yt-api",
                 },

@@ -38,11 +38,6 @@ def test_research_request_rejects_unknown_sources() -> None:
         ResearchRequest(topic="python", sources=["reddit"])
 
 
-def test_research_request_rejects_yt_until_search_is_available() -> None:
-    with pytest.raises(ValidationError):
-        ResearchRequest(topic="python", sources=["yt"])
-
-
 def test_research_request_defaults_to_x_and_hn() -> None:
     request = ResearchRequest(topic="python")
 
@@ -50,10 +45,17 @@ def test_research_request_defaults_to_x_and_hn() -> None:
     assert request.days == 1
 
 
+def test_research_request_accepts_yt_when_requested() -> None:
+    request = ResearchRequest(topic="python", sources=["yt"])
+
+    assert request.sources == ["yt"]
+
+
 def test_search_requests_default_to_one_day_window() -> None:
     assert XSearchRequest(query="python").days == 1
     assert HNSearchRequest(query="python").days == 1
     assert YTSearchRequest(query="python").days == 1
+    assert YTSearchRequest(query="python").transcript_limit == 3
 
 
 def test_x_search_request_rejects_conflicting_date_filters() -> None:
