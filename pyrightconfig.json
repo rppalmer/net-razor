@@ -1,0 +1,28 @@
+{
+  "include": [
+    "shared/src",
+    "orchestrator/src",
+    "platforms/x-api/src",
+    "platforms/hn-api/src",
+    "platforms/yt-api/src",
+    "mcp-server/src",
+    "dev-tools/src",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "_reference"
+  ],
+  "extraPaths": [
+    "shared/src",
+    "orchestrator/src",
+    "platforms/x-api/src",
+    "platforms/hn-api/src",
+    "platforms/yt-api/src",
+    "mcp-server/src",
+    "dev-tools/src"
+  ],
+  "venvPath": ".",
+  "venv": ".venv"
+}

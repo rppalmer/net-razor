@@ -1,0 +1,16 @@
+{
+  "include": [
+    "src"
+  ],
+  "extraPaths": [
+    "src",
+    "../shared/src",
+    "../orchestrator/src",
+    "../platforms/x-api/src",
+    "../platforms/hn-api/src",
+    "../platforms/yt-api/src",
+    "../dev-tools/src"
+  ],
+  "venvPath": "..",
+  "venv": ".venv"
+}

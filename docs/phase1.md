@@ -6,7 +6,7 @@ Local services:
 - X API: `http://127.0.0.1:8011`
 - HN API: `http://127.0.0.1:8012`
 - YT API: `http://127.0.0.1:8013`
-- MCP server: `python -m net_razor_mcp`
+- MCP server: `.venv/bin/python -m net_razor_mcp`
 
 ## Setup
 
@@ -45,22 +45,22 @@ YouTube search. In that mode, `yt-api` only checks recent videos from those chan
 Start all HTTP services from one terminal:
 
 ```bash
-python -m net_razor_dev
+.venv/bin/python -m net_razor_dev
 ```
 
 Then configure Hermes, or another MCP host, to launch the MCP server separately over stdio:
 
 ```bash
-python -m net_razor_mcp
+.venv/bin/python -m net_razor_mcp
 ```
 
 For debugging, each HTTP service can still be started separately:
 
 ```bash
-python -m net_razor_orchestrator
-python -m x_api
-python -m hn_api
-python -m yt_api
+.venv/bin/python -m net_razor_orchestrator
+.venv/bin/python -m x_api
+.venv/bin/python -m hn_api
+.venv/bin/python -m yt_api
 ```
 
 ## Quick Checks
@@ -166,7 +166,8 @@ Example MCP host config:
   "mcpServers": {
     "net-razor": {
       "command": "/Users/ryanpalmer/Projects/net-razor/.venv/bin/python",
-      "args": ["-m", "net_razor_mcp"]
+      "args": ["-m", "net_razor_mcp"],
+      "cwd": "/Users/ryanpalmer/Projects/net-razor"
     }
   }
 }
@@ -178,3 +179,5 @@ Example MCP host config:
 - Search defaults to `days: 1`.
 - X cookies stay only in `platforms/x-api/.env`.
 - `.env`, local databases, logs, `_reference/`, and local caches are ignored by Git.
+- If `net_razor_dev` or another module is not found, run:
+  `./.venv/bin/python -m pip install -e ".[dev]"`.
