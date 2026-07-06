@@ -1,12 +1,6 @@
 {
   "include": [
-    "shared/src",
-    "orchestrator/src",
-    "platforms/x-api/src",
-    "platforms/hn-api/src",
-    "platforms/yt-api/src",
-    "mcp-server/src",
-    "dev-tools/src",
+    "src",
     "tests"
   ],
   "exclude": [
@@ -15,13 +9,7 @@
     "_reference"
   ],
   "extraPaths": [
-    "shared/src",
-    "orchestrator/src",
-    "platforms/x-api/src",
-    "platforms/hn-api/src",
-    "platforms/yt-api/src",
-    "mcp-server/src",
-    "dev-tools/src"
+    "src"
   ],
   "venvPath": ".",
   "venv": ".venv"

@@ -1,43 +1,83 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
-from x_api.backend import BackendStatus
-from x_api.config import Settings
+import pytest
+
+from net_razor.app import App
+from net_razor.audit.recorder import AuditRecorder
+from net_razor.audit.store import AuditStore
+from net_razor.clock import FixedClock, ResolvedWindow
+from net_razor.models import FetchResult
+
+FIXED_NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=UTC)
 
 
-def make_settings(**overrides: Any) -> Settings:
-    values: dict[str, Any] = {
-        "auth_token": "test-auth-token",
-        "ct0": "test-ct0",
-        "x_search_delay_seconds": 0,
-        "x_search_retry_backoff_seconds": 0,
-    }
-    values.update(overrides)
-    return Settings(**values)
+class RecordingSource:
+    """A pure fake source: returns a canned FetchResult and records its calls."""
+
+    def __init__(self, name: str, result: FetchResult | Exception) -> None:
+        self.name = name
+        self._result = result
+        self.calls: list[tuple[Any, ResolvedWindow]] = []
+
+    async def fetch(self, request: Any, window: ResolvedWindow) -> FetchResult:
+        self.calls.append((request, window))
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
 
 
-class MockBackend:
-    def __init__(
-        self,
-        *,
-        items: list[dict[str, Any]] | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        self.items = items or []
-        self.error = error
-        self.queries: list[tuple[str, int, str]] = []
+@pytest.fixture
+def clock() -> FixedClock:
+    return FixedClock(FIXED_NOW)
 
-    async def status(self) -> BackendStatus:
-        return BackendStatus(
-            node_available=True,
-            node_version="v22.22.3",
-            node_supported=True,
-            backend_available=True,
+
+@pytest.fixture
+def store(tmp_path) -> AuditStore:
+    store = AuditStore(tmp_path / "audit.db")
+    store.initialize()
+    return store
+
+
+@pytest.fixture
+def make_app(store, clock):
+    """Factory building an App wired with fake sources."""
+
+    def _make(*, x=None, hn=None, yt=None, yt_transcript=None) -> App:
+        return App(
+            settings=_StubSettings(),
+            clock=clock,
+            store=store,
+            recorder=AuditRecorder(store, clock),
+            x_source=x or RecordingSource("x", FetchResult.empty({})),
+            hn_source=hn or RecordingSource("hn", FetchResult.empty({})),
+            yt_source=yt or RecordingSource("yt", FetchResult.empty({})),
+            yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
         )
 
-    async def search(self, query: str, count: int, mode: str) -> list[dict[str, Any]]:
-        self.queries.append((query, count, mode))
-        if self.error:
-            raise self.error
-        return self.items
+    return _make
+
+
+class _StubTranscriptFetcher:
+    async def transcript(self, request):
+        return FetchResult(
+            items=[], raw={}, errors=[], effective_request={},
+            meta={"response": {"video_id": "", "text": None, "errors": []}},
+        )
+
+
+class _StubSettings:
+    x_credentials_configured = False
+    youtube_search_configured = False
+    yt_search_mode = "broad"
+    youtube_channel_id_list: list[str] = []
+    hn_algolia_base_url = "https://hn.algolia.com/api/v1"
+    node_binary = "node"
+    youtube_api_key_value = None
+    proxy_url_value = None
+
+    @property
+    def database_path(self):  # pragma: no cover - not used by these tests
+        raise NotImplementedError
