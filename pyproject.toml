@@ -24,6 +24,10 @@ dev = [
     "ruff>=0.5",
 ]
 
+[project.scripts]
+net-razor-dev = "net_razor_dev.runner:main"
+net-razor-mcp = "net_razor_mcp.server:main"
+
 [tool.setuptools.packages.find]
 where = [
     "shared/src",

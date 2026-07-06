@@ -6,7 +6,7 @@ Local services:
 - X API: `http://127.0.0.1:8011`
 - HN API: `http://127.0.0.1:8012`
 - YT API: `http://127.0.0.1:8013`
-- MCP server: `.venv/bin/python -m net_razor_mcp`
+- MCP server: `scripts/net-razor-mcp`
 
 ## Setup
 
@@ -51,7 +51,7 @@ Start all HTTP services from one terminal:
 Then configure Hermes, or another MCP host, to launch the MCP server separately over stdio:
 
 ```bash
-.venv/bin/python -m net_razor_mcp
+scripts/net-razor-mcp
 ```
 
 For debugging, each HTTP service can still be started separately:
@@ -161,16 +161,24 @@ Available MCP tools:
 
 Example MCP host config:
 
-```json
-{
-  "mcpServers": {
-    "net-razor": {
-      "command": "/Users/ryanpalmer/Projects/net-razor/.venv/bin/python",
-      "args": ["-m", "net_razor_mcp"],
-      "cwd": "/Users/ryanpalmer/Projects/net-razor"
-    }
-  }
-}
+```yaml
+mcp_servers:
+  net-razor:
+    command: <repo-root>/scripts/net-razor-mcp
+    args: []
+    cwd: <repo-root>
+    enabled: true
+    timeout: 60
+    connect_timeout: 30
+```
+
+Replace `<repo-root>` with the checkout path on that machine. The launcher itself is
+repo-relative, so the Python path and working directory are not hard-coded in app code.
+
+Manual MCP smoke test:
+
+```bash
+.venv/bin/python scripts/mcp_smoke.py
 ```
 
 ## Notes
