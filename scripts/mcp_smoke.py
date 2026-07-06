@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,11 +44,12 @@ def to_jsonable(value: Any) -> Any:
 async def run_smoke(args: argparse.Namespace) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     command = str(repo_root / "scripts" / "net-razor-mcp") if args.launcher else sys.executable
-    command_args = [] if args.launcher else ["-m", "net_razor_mcp"]
+    command_args = [] if args.launcher else ["-m", "net_razor.mcp"]
     params = StdioServerParameters(
         command=command,
         args=command_args,
         cwd=str(repo_root),
+        env=os.environ.copy(),
     )
 
     print(f"command: {command}")

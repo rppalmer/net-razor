@@ -7,36 +7,44 @@ export PATH
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${NET_RAZOR_PYTHON:-$REPO_ROOT/.venv/bin/python}"
-LOG_DIR="${NET_RAZOR_LOG_DIR:-$REPO_ROOT/logs}"
-LOG_FILE="${NET_RAZOR_MCP_LOG_FILE:-$LOG_DIR/net-razor-mcp-launch.log}"
 
 cd "$REPO_ROOT"
-mkdir -p "$LOG_DIR"
 
-{
-  echo "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') starting net-razor MCP ====="
-  echo "repo_root=$REPO_ROOT"
-  echo "script_dir=$SCRIPT_DIR"
-  echo "pwd=$(pwd)"
-  echo "python=$PYTHON"
-} >> "$LOG_FILE"
+log_debug() {
+  if [ "${NET_RAZOR_MCP_DEBUG:-}" != "1" ]; then
+    return
+  fi
+
+  if [ -n "${NET_RAZOR_MCP_LOG_FILE:-}" ]; then
+    mkdir -p "$(dirname "$NET_RAZOR_MCP_LOG_FILE")"
+    printf '%s\n' "$1" >> "$NET_RAZOR_MCP_LOG_FILE"
+  else
+    printf '%s\n' "$1" >&2
+  fi
+}
+
+log_debug "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') starting net-razor MCP ====="
+log_debug "repo_root=$REPO_ROOT"
+log_debug "script_dir=$SCRIPT_DIR"
+log_debug "pwd=$(pwd)"
+log_debug "python=$PYTHON"
 
 if [ ! -x "$PYTHON" ]; then
-  {
-    echo "Net-Razor Python interpreter not found: $PYTHON"
-    echo "Create the venv with: python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'"
-  } | tee -a "$LOG_FILE" >&2
+  echo "Net-Razor Python interpreter not found: $PYTHON" >&2
+  echo "Create the venv with: python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'" >&2
   exit 1
 fi
 
-"$PYTHON" - <<'PY' >> "$LOG_FILE" 2>&1
+if [ "${NET_RAZOR_MCP_DEBUG:-}" = "1" ]; then
+  "$PYTHON" - <<'PY' 2>&1 | while IFS= read -r line; do log_debug "$line"; done
 import importlib.util
 import sys
 
 print(f"python_version={sys.version.split()[0]}")
-for module_name in ("net_razor_mcp", "mcp", "httpx", "pydantic"):
+for module_name in ("net_razor", "mcp", "httpx", "pydantic"):
     spec = importlib.util.find_spec(module_name)
     print(f"module.{module_name}={spec.origin if spec else 'missing'}")
 PY
+fi
 
-exec "$PYTHON" -m net_razor_mcp 2>> "$LOG_FILE"
+exec "$PYTHON" -m net_razor.mcp
