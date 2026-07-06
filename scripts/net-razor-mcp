@@ -4,13 +4,36 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PYTHON="${NET_RAZOR_PYTHON:-$REPO_ROOT/.venv/bin/python}"
+LOG_DIR="${NET_RAZOR_LOG_DIR:-$REPO_ROOT/logs}"
+LOG_FILE="${NET_RAZOR_MCP_LOG_FILE:-$LOG_DIR/net-razor-mcp-launch.log}"
 
 cd "$REPO_ROOT"
+mkdir -p "$LOG_DIR"
+
+{
+  echo "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') starting net-razor MCP ====="
+  echo "repo_root=$REPO_ROOT"
+  echo "script_dir=$SCRIPT_DIR"
+  echo "pwd=$(pwd)"
+  echo "python=$PYTHON"
+} >> "$LOG_FILE"
 
 if [ ! -x "$PYTHON" ]; then
-  echo "Net-Razor Python interpreter not found: $PYTHON" >&2
-  echo "Create the venv with: python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'" >&2
+  {
+    echo "Net-Razor Python interpreter not found: $PYTHON"
+    echo "Create the venv with: python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'"
+  } | tee -a "$LOG_FILE" >&2
   exit 1
 fi
 
-exec "$PYTHON" -m net_razor_mcp
+"$PYTHON" - <<'PY' >> "$LOG_FILE" 2>&1
+import importlib.util
+import sys
+
+print(f"python_version={sys.version.split()[0]}")
+for module_name in ("net_razor_mcp", "mcp", "httpx", "pydantic"):
+    spec = importlib.util.find_spec(module_name)
+    print(f"module.{module_name}={spec.origin if spec else 'missing'}")
+PY
+
+exec "$PYTHON" -m net_razor_mcp 2>> "$LOG_FILE"

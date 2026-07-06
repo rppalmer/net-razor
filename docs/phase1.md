@@ -179,7 +179,10 @@ Manual MCP smoke test:
 
 ```bash
 .venv/bin/python scripts/mcp_smoke.py
+.venv/bin/python scripts/mcp_smoke.py --launcher
 ```
+
+The launcher writes local diagnostics to `logs/net-razor-mcp-launch.log`.
 
 ## Notes
 
