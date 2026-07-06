@@ -167,6 +167,7 @@ mcp_servers:
     command: <repo-root>/scripts/net-razor-mcp
     args: []
     cwd: <repo-root>
+    env: {}
     enabled: true
     timeout: 60
     connect_timeout: 30
@@ -174,6 +175,7 @@ mcp_servers:
 
 Replace `<repo-root>` with the checkout path on that machine. The launcher itself is
 repo-relative, so the Python path and working directory are not hard-coded in app code.
+It also tolerates MCP hosts that launch with an empty environment.
 
 Manual MCP smoke test:
 
