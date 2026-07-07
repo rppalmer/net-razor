@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -8,6 +8,7 @@ import httpx
 
 from net_razor.clock import ResolvedWindow
 from net_razor.models import YTRequest
+from net_razor.sources.yt.channel_ref import ChannelRef
 
 
 class YouTubeSearchError(Exception):
@@ -36,6 +37,15 @@ class YouTubeVideoCandidate:
         return f"https://www.youtube.com/watch?v={self.video_id}"
 
 
+@dataclass(frozen=True)
+class ResolvedChannel:
+    """A channel reference that has been resolved to a concrete channel ID."""
+
+    source_ref: ChannelRef
+    channel_id: str
+    title: str | None = None
+
+
 class YouTubeSearchClient(Protocol):
     async def search(
         self, request: YTRequest, window: ResolvedWindow
@@ -50,21 +60,87 @@ class HttpYouTubeSearchClient:
         base_url: str,
         timeout_seconds: float,
         *,
-        channel_ids: list[str] | None = None,
+        channel_refs: list[ChannelRef] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.channel_ids = channel_ids or []
+        self.channel_refs = channel_refs or []
         self.transport = transport
+        self._resolve_cache: dict[tuple[str, str], ResolvedChannel | None] = {}
 
     async def search(
         self, request: YTRequest, window: ResolvedWindow
     ) -> list[YouTubeVideoCandidate]:
-        if self.channel_ids:
+        if self.channel_refs:
             return await self._channel_limited_search(request, window)
         return await self._broad_search(request, window)
+
+    async def resolve_channels(
+        self, refs: list[ChannelRef]
+    ) -> tuple[list[ResolvedChannel], list[str]]:
+        """Resolve refs to channel IDs. Returns (resolved, unresolved raw refs).
+
+        ``id`` refs resolve with no API call; handles/usernames use
+        ``channels.list``. Results are cached per client so repeated calls (e.g.
+        the same configured channels across tools) hit the API at most once."""
+
+        resolved: list[ResolvedChannel] = []
+        unresolved: list[str] = []
+        async with self._client() as client:
+            for ref in refs:
+                channel = await self._resolve_one(client, ref)
+                if channel is None:
+                    unresolved.append(ref.raw)
+                else:
+                    resolved.append(channel)
+        return _dedupe_resolved(resolved), unresolved
+
+    async def _resolve_one(
+        self, client: httpx.AsyncClient, ref: ChannelRef
+    ) -> ResolvedChannel | None:
+        if ref.kind == "id":
+            return ResolvedChannel(source_ref=ref, channel_id=ref.value)
+        key = (ref.kind, ref.value)
+        if key in self._resolve_cache:
+            cached = self._resolve_cache[key]
+            # Reattach the current ref so its per-channel overrides win over the
+            # ref that first populated the cache for this handle/username.
+            return replace(cached, source_ref=ref) if cached else None
+
+        params: dict[str, Any] = {"part": "id,snippet", "key": self.api_key}
+        if ref.kind == "handle":
+            params["forHandle"] = f"@{ref.value}"
+        else:
+            params["forUsername"] = ref.value
+        response = await client.get("/youtube/v3/channels", params=params)
+        _raise_for_youtube_error(response, "YouTube channel lookup failed")
+
+        items = response.json().get("items", [])
+        channel: ResolvedChannel | None = None
+        if items:
+            channel_id = items[0].get("id")
+            title = items[0].get("snippet", {}).get("title")
+            if channel_id:
+                channel = ResolvedChannel(source_ref=ref, channel_id=channel_id, title=title)
+        self._resolve_cache[key] = channel
+        return channel
+
+    async def search_channel(
+        self, channel_id: str, window: ResolvedWindow, max_results: int
+    ) -> list[YouTubeVideoCandidate]:
+        """Return the most recent videos from one channel within the window."""
+
+        async with self._client() as client:
+            candidates = await self._channel_page(client, channel_id, window, max_results)
+            if not candidates:
+                return []
+            details = await self._fetch_details(client, candidates)
+        stats = _parse_statistics(details)
+        enriched = [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
+        enriched.sort(key=lambda c: c.published_at, reverse=True)
+        return enriched[:max_results]
 
     async def _broad_search(
         self, request: YTRequest, window: ResolvedWindow
@@ -96,23 +172,15 @@ class HttpYouTubeSearchClient:
     async def _channel_limited_search(
         self, request: YTRequest, window: ResolvedWindow
     ) -> list[YouTubeVideoCandidate]:
+        resolved, _ = await self.resolve_channels(self.channel_refs)
         collected: list[YouTubeVideoCandidate] = []
         async with self._client() as client:
-            for channel_id in self.channel_ids:
-                params = {
-                    "part": "snippet",
-                    "type": "video",
-                    "channelId": channel_id,
-                    "maxResults": request.max_results,
-                    "order": "date",
-                    "publishedAfter": _iso_z(window.since),
-                    "key": self.api_key,
-                }
-                if window.until is not None:
-                    params["publishedBefore"] = _iso_z(window.until)
-                response = await client.get("/youtube/v3/search", params=params)
-                _raise_for_youtube_error(response, "YouTube channel search failed")
-                collected.extend(_parse_search_candidates(response.json()))
+            for channel in resolved:
+                collected.extend(
+                    await self._channel_page(
+                        client, channel.channel_id, window, request.max_results
+                    )
+                )
 
             candidates = _dedupe_candidates(collected)
             if not candidates:
@@ -122,6 +190,28 @@ class HttpYouTubeSearchClient:
         stats = _parse_statistics(details)
         enriched = [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
         return _rank_candidates(enriched, request.query)[: request.max_results]
+
+    async def _channel_page(
+        self,
+        client: httpx.AsyncClient,
+        channel_id: str,
+        window: ResolvedWindow,
+        max_results: int,
+    ) -> list[YouTubeVideoCandidate]:
+        params = {
+            "part": "snippet",
+            "type": "video",
+            "channelId": channel_id,
+            "maxResults": max_results,
+            "order": "date",
+            "publishedAfter": _iso_z(window.since),
+            "key": self.api_key,
+        }
+        if window.until is not None:
+            params["publishedBefore"] = _iso_z(window.until)
+        response = await client.get("/youtube/v3/search", params=params)
+        _raise_for_youtube_error(response, "YouTube channel search failed")
+        return _parse_search_candidates(response.json())
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -209,6 +299,17 @@ def _dedupe_candidates(candidates: list[YouTubeVideoCandidate]) -> list[YouTubeV
             continue
         seen.add(candidate.video_id)
         deduped.append(candidate)
+    return deduped
+
+
+def _dedupe_resolved(channels: list[ResolvedChannel]) -> list[ResolvedChannel]:
+    seen: set[str] = set()
+    deduped: list[ResolvedChannel] = []
+    for channel in channels:
+        if channel.channel_id in seen:
+            continue
+        seen.add(channel.channel_id)
+        deduped.append(channel)
     return deduped
 
 

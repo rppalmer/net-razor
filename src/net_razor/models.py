@@ -174,6 +174,52 @@ class YTTranscriptRequest(BaseModel):
         return languages
 
 
+class YTChannelDigestRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # Empty -> use the channels configured in settings. Non-empty overrides them
+    # (accepts channel IDs, @handles, or channel URLs).
+    channels: list[str] = Field(default_factory=list)
+    days: int = Field(default=7, ge=1, le=3650)
+    since: date | None = None
+    until: date | None = None
+    videos_per_channel: int = Field(default=5, ge=1, le=25)
+    fetch_transcripts: bool = True
+    transcript_limit_per_channel: int = Field(default=2, ge=0, le=10)
+    languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
+
+    @field_validator("channels")
+    @classmethod
+    def _clean_channels(cls, value: list[str]) -> list[str]:
+        return [entry.strip() for entry in value if entry.strip()]
+
+    @field_validator("languages")
+    @classmethod
+    def _validate_languages(cls, value: list[str]) -> list[str]:
+        languages = [lang.strip() for lang in value if lang.strip()]
+        if not languages:
+            raise ValueError("languages must contain at least one value")
+        return languages
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> YTChannelDigestRequest:
+        if self.since and self.until and self.until <= self.since:
+            raise ValueError("until must be after since")
+        return self
+
+
+class YTChannelLeg(BaseModel):
+    """One channel's slice of a digest — the audited request for a single leg."""
+
+    channel_id: str
+    channel_title: str = ""
+    videos_per_channel: int = Field(ge=1, le=25)
+    fetch_transcripts: bool = True
+    transcript_limit: int = Field(ge=0, le=10)
+    languages: list[str] = Field(min_length=1)
+    query_label: str
+
+
 class ResearchRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

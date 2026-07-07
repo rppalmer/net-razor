@@ -6,36 +6,25 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from youtube_transcript_api._errors import (
-    NoTranscriptFound,
-    TranscriptsDisabled,
-    VideoUnavailable,
-)
 
 from net_razor.clock import ResolvedWindow
 from net_razor.models import (
     EvidenceAuthor,
-    EvidenceEngagement,
     EvidenceItem,
     FetchResult,
     ServiceErrorItem,
     YTRequest,
     YTTranscriptRequest,
 )
-from net_razor.sources.yt.search_client import (
-    YouTubeSearchClient,
-    YouTubeSearchError,
-    YouTubeVideoCandidate,
+from net_razor.sources.yt.enrich import (
+    TRANSCRIPT_ERROR_TYPES,
+    candidate_to_item,
+    fetch_transcripts,
 )
+from net_razor.sources.yt.search_client import YouTubeSearchClient, YouTubeSearchError
 from net_razor.sources.yt.transcript_client import TranscriptClient, segments_from_result
 from net_razor.sources.yt.video_id import extract_video_id
 
-_TRANSCRIPT_ERRORS = {
-    TranscriptsDisabled: "transcripts_disabled",
-    NoTranscriptFound: "no_transcript_found",
-    VideoUnavailable: "video_unavailable",
-}
-_MAX_CONCURRENT_TRANSCRIPTS = 4
 _NO_PUBLISH_DATE = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -94,20 +83,10 @@ class YTSource:
                 effective_request=effective,
             )
 
-        transcript_limit = min(request.transcript_limit, len(candidates))
-        transcripts: dict[int, tuple[str, dict[str, Any]] | None] = {}
-        errors: list[ServiceErrorItem] = []
-
-        if request.fetch_transcripts and transcript_limit > 0:
-            semaphore = asyncio.Semaphore(_MAX_CONCURRENT_TRANSCRIPTS)
-
-            async def _load(index: int, candidate: YouTubeVideoCandidate) -> None:
-                async with semaphore:
-                    transcripts[index] = await self._fetch_transcript(candidate, request, errors)
-
-            await asyncio.gather(
-                *(_load(i, candidates[i]) for i in range(transcript_limit))
-            )
+        want = request.transcript_limit if request.fetch_transcripts else 0
+        transcripts, errors = await fetch_transcripts(
+            self._transcript_client, candidates, want, request.languages
+        )
 
         items: list[EvidenceItem] = []
         raw: dict[str, dict[str, Any]] = {}
@@ -115,7 +94,7 @@ class YTSource:
             transcript = transcripts.get(index)
             transcript_text = transcript[0] if transcript else None
             transcript_meta = transcript[1] if transcript else None
-            items.append(_candidate_to_item(candidate, request, transcript_text))
+            items.append(candidate_to_item(candidate, request.query, transcript_text))
             raw[candidate.video_id] = {**candidate.raw, "transcript": transcript_meta}
 
         return FetchResult(
@@ -125,36 +104,9 @@ class YTSource:
             effective_request=effective,
             meta={
                 "candidates_seen": len(candidates),
-                "transcript_fetches_attempted": (
-                    transcript_limit if request.fetch_transcripts else 0
-                ),
+                "transcript_fetches_attempted": min(want, len(candidates)),
             },
         )
-
-    async def _fetch_transcript(
-        self,
-        candidate: YouTubeVideoCandidate,
-        request: YTRequest,
-        errors: list[ServiceErrorItem],
-    ) -> tuple[str, dict[str, Any]] | None:
-        try:
-            result = await asyncio.to_thread(
-                self._transcript_client.fetch, candidate.video_id, request.languages
-            )
-            segments = segments_from_result(result)
-            text = "\n".join(segment.text for segment in segments).strip()
-            meta = {
-                "language": result.language,
-                "language_code": result.language_code,
-                "is_generated": result.is_generated,
-                "segment_count": len(segments),
-            }
-            return text, meta
-        except tuple(_TRANSCRIPT_ERRORS) as exc:
-            errors.append(_candidate_error(candidate, _TRANSCRIPT_ERRORS[type(exc)], str(exc)))
-        except Exception as exc:
-            errors.append(_candidate_error(candidate, "transcript_failed", str(exc)))
-        return None
 
 
 class YTTranscriptFetcher:
@@ -181,9 +133,10 @@ class YTTranscriptFetcher:
 
         try:
             result = await asyncio.to_thread(self._client.fetch, video_id, request.languages)
-        except tuple(_TRANSCRIPT_ERRORS) as exc:
+        except tuple(TRANSCRIPT_ERROR_TYPES) as exc:
             return _transcript_error(
-                effective, video_id, request.languages, _TRANSCRIPT_ERRORS[type(exc)], str(exc)
+                effective, video_id, request.languages,
+                TRANSCRIPT_ERROR_TYPES[type(exc)], str(exc),
             )
         except Exception as exc:
             return _transcript_error(
@@ -263,34 +216,3 @@ def _transcript_error(
     )
 
 
-def _candidate_error(
-    candidate: YouTubeVideoCandidate, error_type: str, message: str
-) -> ServiceErrorItem:
-    return ServiceErrorItem(
-        type=error_type,
-        message=message,
-        details={"video_id": candidate.video_id, "canonical_url": candidate.canonical_url},
-    )
-
-
-def _candidate_to_item(
-    candidate: YouTubeVideoCandidate, request: YTRequest, transcript_text: str | None
-) -> EvidenceItem:
-    text = transcript_text or candidate.description or candidate.title
-    return EvidenceItem(
-        source="yt",
-        source_backend="yt-api",
-        source_id=candidate.video_id,
-        item_type="transcript" if transcript_text else "video",
-        canonical_url=candidate.canonical_url,
-        title=candidate.title,
-        text=text,
-        author=EvidenceAuthor(handle=candidate.channel_id, display_name=candidate.channel_title),
-        published_at=candidate.published_at,
-        engagement=EvidenceEngagement(
-            likes=candidate.like_count,
-            replies=candidate.comment_count,
-            views=candidate.view_count,
-        ),
-        query_used=request.query,
-    )

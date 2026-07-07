@@ -9,6 +9,7 @@ from net_razor.models import (
     HNRequest,
     ResearchRequest,
     XRequest,
+    YTChannelDigestRequest,
     YTRequest,
     YTTranscriptRequest,
 )
@@ -97,6 +98,28 @@ def create_server(app: App | None = None) -> FastMCP:
                 days=days,
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
+            )
+        )
+
+    @mcp.tool()
+    async def net_razor_yt_channel_digest(
+        days: int = 7,
+        videos_per_channel: int = 5,
+        transcript_limit_per_channel: int = 2,
+        fetch_transcripts: bool = True,
+        channels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Per-channel YouTube digest: for each configured (or supplied) channel,
+        pull its latest videos in the window and attach transcripts. Results are
+        grouped per channel, not merged into one list (audited)."""
+
+        return await net_razor_app.yt_channel_digest(
+            YTChannelDigestRequest(
+                days=days,
+                videos_per_channel=videos_per_channel,
+                transcript_limit_per_channel=transcript_limit_per_channel,
+                fetch_transcripts=fetch_transcripts,
+                channels=channels or [],
             )
         )
 

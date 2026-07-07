@@ -7,6 +7,7 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from net_razor.paths import find_repo_root
+from net_razor.sources.yt.channel_ref import ChannelRef, parse_channel_refs
 
 _REPO_ROOT = find_repo_root(Path(__file__))
 
@@ -105,11 +106,16 @@ class Settings(BaseSettings):
         return [channel.strip() for channel in raw.split(",") if channel.strip()]
 
     @property
+    def youtube_channel_refs(self) -> list[ChannelRef]:
+        """Configured channels parsed into refs (IDs, @handles, or URLs)."""
+        return parse_channel_refs(self.youtube_channel_ids)
+
+    @property
     def youtube_search_configured(self) -> bool:
         if self.youtube_api_key_value is None:
             return False
         if self.yt_search_mode == "channels":
-            return bool(self.youtube_channel_id_list)
+            return bool(self.youtube_channel_refs)
         return True
 
     @property

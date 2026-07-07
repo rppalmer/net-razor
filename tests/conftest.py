@@ -45,9 +45,11 @@ def store(tmp_path) -> AuditStore:
 def make_app(store, clock):
     """Factory building an App wired with fake sources."""
 
-    def _make(*, x=None, hn=None, yt=None, yt_transcript=None) -> App:
+    def _make(
+        *, x=None, hn=None, yt=None, yt_transcript=None, yt_digest=None, settings=None
+    ) -> App:
         return App(
-            settings=_StubSettings(),
+            settings=settings or _StubSettings(),
             clock=clock,
             store=store,
             recorder=AuditRecorder(store, clock),
@@ -55,6 +57,7 @@ def make_app(store, clock):
             hn_source=hn or RecordingSource("hn", FetchResult.empty({})),
             yt_source=yt or RecordingSource("yt", FetchResult.empty({})),
             yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
+            yt_channel_digest_source=yt_digest or _StubDigest(),
         )
 
     return _make
@@ -68,11 +71,22 @@ class _StubTranscriptFetcher:
         )
 
 
+class _StubDigest:
+    name = "yt"
+
+    async def resolve_channels(self, refs):
+        return [], [ref.raw for ref in refs]
+
+    async def fetch(self, leg, window):
+        return FetchResult.empty({})
+
+
 class _StubSettings:
     x_credentials_configured = False
     youtube_search_configured = False
     yt_search_mode = "broad"
     youtube_channel_id_list: list[str] = []
+    youtube_channel_refs: list = []
     hn_algolia_base_url = "https://hn.algolia.com/api/v1"
     node_binary = "node"
     youtube_api_key_value = None

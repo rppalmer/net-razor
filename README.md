@@ -45,8 +45,21 @@ YT_SEARCH_MODE=broad
 YOUTUBE_CHANNEL_IDS=
 ```
 
-Use `YT_SEARCH_MODE=channels` with comma-separated `YOUTUBE_CHANNEL_IDS` to avoid broad
-YouTube search. In that mode, YouTube discovery only checks recent videos from those channels.
+Use `YT_SEARCH_MODE=channels` with `YOUTUBE_CHANNEL_IDS` to avoid broad YouTube search. In
+that mode, YouTube discovery only checks recent videos from those channels.
+
+`YOUTUBE_CHANNEL_IDS` accepts a comma- or newline-separated list where each entry may be a
+channel ID (`UC…`), an `@handle`, or a channel URL (`/channel/UC…`, `/@handle`, `/user/name`,
+`/c/name`); handles and URLs are resolved to channel IDs via the Data API. Each entry may carry
+per-channel overrides after a `|`, for example:
+
+```dotenv
+YOUTUBE_CHANNEL_IDS=@Fireship | videos=10 days=14, UCabc...xyz
+```
+
+The `net_razor_yt_channel_digest` tool pulls the latest videos (plus transcripts) for each
+configured channel and returns them **grouped per channel**, rather than merged into one list.
+Pass `channels` to override the configured set for a single call.
 
 ## MCP
 
@@ -55,17 +68,22 @@ Configure Hermes, or another MCP host, to launch the server over stdio:
 ```yaml
 mcp_servers:
   net-razor:
-    command: <repo-root>/scripts/net-razor-mcp
-    args: []
-    cwd: <repo-root>
+    command: <repo-root>/.venv/bin/python
+    args: [-m, net_razor.mcp]
     env: {}
     enabled: true
     timeout: 60
     connect_timeout: 30
 ```
 
-Replace `<repo-root>` with the checkout path on that machine. The launcher resolves paths
-relative to the repo, so the app code does not depend on a hard-coded checkout location.
+Replace `<repo-root>` with the checkout path on that machine. Config and the audit database
+resolve relative to the installed package location, not the working directory, so no `cwd` is
+required.
+
+X search shells out to Node and locates it with `shutil.which`, which searches the launching
+host's `PATH`. If your MCP host launches with a sparse environment, `node` may not be found. The
+robust fix is an absolute `NODE_BINARY` in `.env` (for example `NODE_BINARY=/opt/homebrew/bin/node`),
+so Node resolution does not depend on `PATH`.
 
 Available MCP tools:
 
@@ -77,24 +95,17 @@ Available MCP tools:
 - `net_razor_x_search`
 - `net_razor_hn_search`
 - `net_razor_yt_search`
+- `net_razor_yt_channel_digest`
 - `net_razor_yt_transcript`
 
 Manual MCP smoke test:
 
 ```bash
-.venv/bin/python scripts/mcp_smoke.py --launcher
+.venv/bin/python scripts/mcp_smoke.py
 ```
 
-Optional launcher diagnostics:
-
-```yaml
-env:
-  NET_RAZOR_MCP_DEBUG: "1"
-  NET_RAZOR_MCP_LOG_FILE: <repo-root>/logs/net-razor-mcp-launch.log
-```
-
-If the smoke test works but the MCP host stays on `connecting`, verify that the host can see
-the same checkout path and has reloaded the current config.
+If the smoke test works but the MCP host stays on `connecting`, verify that the host points at
+the same checkout, uses that checkout's `.venv` interpreter, and has reloaded the current config.
 
 ## CLI
 
@@ -105,6 +116,7 @@ The CLI is useful for manual testing and one-off local runs. All commands print 
 .venv/bin/net-razor x-search "Python agents lang:en" --max-results 5
 .venv/bin/net-razor hn-search "Python agents" --max-results 5
 .venv/bin/net-razor yt-search "Python agents" --max-results 5 --transcript-limit 2
+.venv/bin/net-razor yt-channel-digest --days 7 --videos-per-channel 5 --channels "@Fireship,UCabc...xyz"
 .venv/bin/net-razor yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --no-include-segments
 .venv/bin/net-razor doctor
 .venv/bin/net-razor runs --limit 20

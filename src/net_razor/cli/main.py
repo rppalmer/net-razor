@@ -10,6 +10,7 @@ from net_razor.models import (
     HNRequest,
     ResearchRequest,
     XRequest,
+    YTChannelDigestRequest,
     YTRequest,
     YTTranscriptRequest,
 )
@@ -69,6 +70,20 @@ def parse_args() -> argparse.Namespace:
     yt_search.add_argument("--transcript-limit", type=int, default=3)
     yt_search.add_argument(
         "--fetch-transcripts", action=argparse.BooleanOptionalAction, default=True
+    )
+
+    yt_digest = subparsers.add_parser(
+        "yt-channel-digest", help="Per-channel YouTube digest (latest videos + transcripts)."
+    )
+    yt_digest.add_argument("--days", type=int, default=7)
+    yt_digest.add_argument("--videos-per-channel", type=int, default=5)
+    yt_digest.add_argument("--transcript-limit-per-channel", type=int, default=2)
+    yt_digest.add_argument(
+        "--fetch-transcripts", action=argparse.BooleanOptionalAction, default=True
+    )
+    yt_digest.add_argument(
+        "--channels", default="",
+        help="Override configured channels (comma-separated IDs, @handles, or URLs).",
     )
 
     yt_transcript = subparsers.add_parser("yt-transcript", help="Fetch one YouTube transcript.")
@@ -142,6 +157,20 @@ async def run_command(args: argparse.Namespace) -> int:
                     days=args.days,
                     transcript_limit=args.transcript_limit,
                     fetch_transcripts=args.fetch_transcripts,
+                )
+            )
+        )
+        return 0
+
+    if args.command == "yt-channel-digest":
+        _print_json(
+            await app.yt_channel_digest(
+                YTChannelDigestRequest(
+                    days=args.days,
+                    videos_per_channel=args.videos_per_channel,
+                    transcript_limit_per_channel=args.transcript_limit_per_channel,
+                    fetch_transcripts=args.fetch_transcripts,
+                    channels=_csv_values(args.channels),
                 )
             )
         )
