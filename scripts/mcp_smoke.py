@@ -23,11 +23,6 @@ def parse_args() -> argparse.Namespace:
         default="{}",
         help='JSON object of arguments for --call, such as \'{"query": "Python"}\'.',
     )
-    parser.add_argument(
-        "--launcher",
-        action="store_true",
-        help="Use scripts/net-razor-mcp, matching the recommended MCP host config.",
-    )
     return parser.parse_args()
 
 
@@ -43,8 +38,8 @@ def to_jsonable(value: Any) -> Any:
 
 async def run_smoke(args: argparse.Namespace) -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    command = str(repo_root / "scripts" / "net-razor-mcp") if args.launcher else sys.executable
-    command_args = [] if args.launcher else ["-m", "net_razor.mcp"]
+    command = sys.executable
+    command_args = ["-m", "net_razor.mcp"]
     params = StdioServerParameters(
         command=command,
         args=command_args,

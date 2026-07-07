@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shutil
 import sqlite3
 import sys
@@ -18,13 +17,11 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
     database_path = store.database_path
     database_parent = database_path.parent
     repo_root = settings.repo_root
-    launcher_path = repo_root / "scripts" / "net-razor-mcp"
 
     storage_check = _check_storage(database_path, database_parent)
     x_node_path = shutil.which(settings.node_binary)
     checks = [
         storage_check,
-        _check_mcp_launcher(launcher_path),
         {
             "name": "x_credentials_configured",
             "ok": settings.x_credentials_configured,
@@ -67,11 +64,7 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
             "python_executable": sys.executable,
             "repo_root": str(repo_root),
             "working_directory": str(Path.cwd()),
-            "mcp_launcher": {
-                "path": str(launcher_path),
-                "exists": launcher_path.exists(),
-                "executable": launcher_path.exists() and os.access(launcher_path, os.X_OK),
-            },
+            "launch": "python -m net_razor.mcp",
         },
         "storage": {
             "database_path": str(settings.database_path),
@@ -136,17 +129,3 @@ def _directory_writable(path: Path) -> tuple[bool, str | None]:
         return False, str(exc)
 
 
-def _check_mcp_launcher(launcher_path: Path) -> dict[str, Any]:
-    exists = launcher_path.exists()
-    executable = exists and os.access(launcher_path, os.X_OK)
-    return {
-        "name": "mcp_launcher",
-        "ok": executable,
-        "severity": "error",
-        "message": (
-            "MCP launcher is present and executable."
-            if executable
-            else "MCP launcher was not found or is not executable."
-        ),
-        "details": {"path": str(launcher_path), "exists": exists, "executable": executable},
-    }

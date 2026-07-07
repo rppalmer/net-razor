@@ -8,8 +8,8 @@ def find_repo_root(start: Path | None = None) -> Path:
 
     for candidate in _candidates(start):
         if (candidate / "pyproject.toml").exists() and (
-            candidate / "scripts" / "net-razor-mcp"
-        ).exists():
+            candidate / "src" / "net_razor"
+        ).is_dir():
             return candidate
     return Path.cwd().resolve()
 
