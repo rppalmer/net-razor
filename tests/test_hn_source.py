@@ -51,6 +51,27 @@ async def test_hn_normalizes_and_dedupes():
 
 
 @pytest.mark.asyncio
+async def test_hn_keeps_text_post_body():
+    payload = {
+        "hits": [
+            {
+                "objectID": "99",
+                "title": "Ask HN: Who is hiring?",
+                "story_text": "We are <b>hiring</b> a &amp; backend engineer.",
+                "author": "pg",
+                "created_at": "2026-07-05T10:00:00Z",
+                "points": 100,
+                "num_comments": 50,
+            }
+        ]
+    }
+    result = await HNSource(_StubClient(payload)).fetch(HNRequest(query="Ask HN"), WINDOW)
+    text = result.items[0].text
+    assert "Ask HN: Who is hiring?" in text
+    assert "We are hiring a & backend engineer." in text  # body kept, HTML cleaned
+
+
+@pytest.mark.asyncio
 async def test_hn_wraps_http_error():
     class _Boom:
         async def search(self, request, window):

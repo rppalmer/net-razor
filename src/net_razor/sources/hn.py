@@ -158,7 +158,10 @@ def _normalize(
 
         author = _clean_text(hit.get("author")) or "unknown"
         external_url = _clean_text(hit.get("url") or hit.get("story_url"))
-        text = title if not external_url else f"{title}\n{external_url}"
+        # story_text / comment_text hold the body of text posts (Ask HN, Show HN,
+        # Tell HN). Keep it so text posts carry more than a bare title.
+        body = _clean_text(hit.get("story_text") or hit.get("comment_text"))
+        text = "\n".join(part for part in (title, external_url, body) if part)
         seen.add(source_id)
         items.append(
             EvidenceItem(
