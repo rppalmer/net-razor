@@ -8,7 +8,7 @@ import httpx
 
 from net_razor.clock import ResolvedWindow
 from net_razor.models import YTRequest
-from net_razor.sources.yt.channel_ref import ChannelRef
+from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel, dedupe_resolved
 
 
 class YouTubeSearchError(Exception):
@@ -35,15 +35,6 @@ class YouTubeVideoCandidate:
     @property
     def canonical_url(self) -> str:
         return f"https://www.youtube.com/watch?v={self.video_id}"
-
-
-@dataclass(frozen=True)
-class ResolvedChannel:
-    """A channel reference that has been resolved to a concrete channel ID."""
-
-    source_ref: ChannelRef
-    channel_id: str
-    title: str | None = None
 
 
 class YouTubeSearchClient(Protocol):
@@ -95,7 +86,7 @@ class HttpYouTubeSearchClient:
                     unresolved.append(ref.raw)
                 else:
                     resolved.append(channel)
-        return _dedupe_resolved(resolved), unresolved
+        return dedupe_resolved(resolved), unresolved
 
     async def _resolve_one(
         self, client: httpx.AsyncClient, ref: ChannelRef
@@ -299,17 +290,6 @@ def _dedupe_candidates(candidates: list[YouTubeVideoCandidate]) -> list[YouTubeV
             continue
         seen.add(candidate.video_id)
         deduped.append(candidate)
-    return deduped
-
-
-def _dedupe_resolved(channels: list[ResolvedChannel]) -> list[ResolvedChannel]:
-    seen: set[str] = set()
-    deduped: list[ResolvedChannel] = []
-    for channel in channels:
-        if channel.channel_id in seen:
-            continue
-        seen.add(channel.channel_id)
-        deduped.append(channel)
     return deduped
 
 

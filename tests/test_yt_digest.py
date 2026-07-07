@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from net_razor.clock import resolve_window
@@ -13,15 +14,15 @@ from net_razor.models import (
     YTChannelDigestRequest,
     YTChannelLeg,
 )
-from net_razor.sources.yt.channel_ref import ChannelRef, parse_channel_refs
+from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel
 from net_razor.sources.yt.digest import YTChannelDigest
-from net_razor.sources.yt.search_client import ResolvedChannel, YouTubeVideoCandidate
+from net_razor.sources.yt.search_client import YouTubeVideoCandidate
 
 WINDOW = resolve_window(days=7, since=None, until=None, now=datetime(2026, 7, 6, tzinfo=UTC))
 
 
 # --------------------------------------------------------------------------- #
-# digest source (one channel leg)
+# digest source (one channel leg, RSS-backed)
 # --------------------------------------------------------------------------- #
 @dataclass
 class _Segment:
@@ -44,14 +45,20 @@ class _FakeTranscriptClient:
         return _FakeTranscript()
 
 
-class _FakeSearchClient:
-    def __init__(self, candidates):
-        self._candidates = candidates
-        self.searched: list[str] = []
+class _FakeDiscovery:
+    def __init__(self, candidates=None, error=None):
+        self._candidates = candidates or []
+        self._error = error
+        self.requested: list[str] = []
 
-    async def search_channel(self, channel_id, window, max_results):
-        self.searched.append(channel_id)
+    async def recent_videos(self, channel_id, window, max_results):
+        self.requested.append(channel_id)
+        if self._error is not None:
+            raise self._error
         return self._candidates[:max_results]
+
+    async def resolve_channels(self, refs):
+        return [], []
 
 
 def _candidate(video_id: str) -> YouTubeVideoCandidate:
@@ -73,28 +80,35 @@ def _leg(channel_id: str, **overrides) -> YTChannelLeg:
 
 @pytest.mark.asyncio
 async def test_digest_fetch_attaches_transcript_and_channel_meta():
-    search = _FakeSearchClient([_candidate("vid00000001"), _candidate("vid00000002")])
-    digest = YTChannelDigest(search_client=search, transcript_client=_FakeTranscriptClient())
+    discovery = _FakeDiscovery([_candidate("vid00000001"), _candidate("vid00000002")])
+    digest = YTChannelDigest(discovery=discovery, transcript_client=_FakeTranscriptClient())
     result = await digest.fetch(_leg("UCxxxxxxxxxxxxxxxxxxxxxx"), WINDOW)
 
-    assert search.searched == ["UCxxxxxxxxxxxxxxxxxxxxxx"]
+    assert discovery.requested == ["UCxxxxxxxxxxxxxxxxxxxxxx"]
     assert len(result.items) == 2
     assert result.items[0].item_type == "transcript" and result.items[0].text == "hello"
     assert result.items[1].item_type == "video"  # beyond transcript_limit
-    assert result.meta["channel_title"] == "Cool Channel"  # taken from the API candidate
+    assert result.meta["channel_title"] == "Cool Channel"  # from the feed
     assert result.meta["video_count"] == 2
+    assert result.effective_request["backend"] == "rss"
 
 
 @pytest.mark.asyncio
-async def test_digest_fetch_reports_configuration_missing_without_client():
-    digest = YTChannelDigest(search_client=None, transcript_client=_FakeTranscriptClient())
+async def test_digest_fetch_maps_403_to_blocked():
+    request = httpx.Request("GET", "https://www.youtube.com/feeds/videos.xml")
+    blocked = httpx.HTTPStatusError(
+        "blocked", request=request, response=httpx.Response(403, request=request)
+    )
+    digest = YTChannelDigest(
+        discovery=_FakeDiscovery(error=blocked), transcript_client=_FakeTranscriptClient()
+    )
     result = await digest.fetch(_leg("UCxxxxxxxxxxxxxxxxxxxxxx"), WINDOW)
     assert result.items == []
-    assert result.errors[0].type == "configuration_missing"
+    assert result.errors[0].type == "blocked"
 
 
 # --------------------------------------------------------------------------- #
-# app-level fan-out (grouped per channel, unresolved surfaced)
+# app-level fan-out (grouped per channel, unresolved surfaced, no API key)
 # --------------------------------------------------------------------------- #
 class _AppFakeDigest:
     name = "yt"
@@ -118,18 +132,6 @@ class _AppFakeDigest:
         )
 
 
-class _SettingsWithKey:
-    x_credentials_configured = False
-    youtube_search_configured = True
-    yt_search_mode = "channels"
-    youtube_channel_id_list = ["@a", "@b"]
-    youtube_channel_refs = parse_channel_refs("@a, @b")
-    hn_algolia_base_url = "https://hn.algolia.com/api/v1"
-    node_binary = "node"
-    youtube_api_key_value = "k"
-    proxy_url_value = None
-
-
 def _item(video_id: str) -> EvidenceItem:
     return EvidenceItem(
         source="yt", source_backend="yt-api", source_id=video_id,
@@ -149,7 +151,7 @@ async def test_app_digest_groups_per_channel_and_surfaces_unresolved(make_app):
         resolved=resolved, unresolved=["@ghost"],
         items_by_channel={"UC1": [_item("vid00000001")], "UC2": []},
     )
-    app = make_app(yt_digest=digest, settings=_SettingsWithKey())
+    app = make_app(yt_digest=digest)
 
     response = await app.yt_channel_digest(
         YTChannelDigestRequest(channels=["@a", "@b", "@ghost"])
@@ -168,13 +170,11 @@ async def test_app_digest_groups_per_channel_and_surfaces_unresolved(make_app):
 
 
 @pytest.mark.asyncio
-async def test_app_digest_requires_api_key(make_app):
-    # default _StubSettings has no api key
-    response = await app_digest(make_app)
-    assert response["caveats"] == ["YouTube channel digest requires YOUTUBE_API_KEY"]
-    assert response["channels"] == []
-
-
-async def app_digest(make_app):
+async def test_app_digest_requires_channels_not_api_key(make_app):
+    # No channels configured and none passed -> a clear caveat, no API key involved.
     app = make_app()
-    return await app.yt_channel_digest(YTChannelDigestRequest(channels=["@a"]))
+    response = await app.yt_channel_digest(YTChannelDigestRequest(channels=[]))
+    assert response["channels"] == []
+    assert response["caveats"] == [
+        "No YouTube channels configured. Set YOUTUBE_CHANNEL_IDS or pass channels."
+    ]

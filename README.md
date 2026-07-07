@@ -37,29 +37,80 @@ AUTH_TOKEN=
 CT0=
 ```
 
-YouTube search needs a YouTube Data API key (transcript fetches work without one):
-
 ```dotenv
 YOUTUBE_API_KEY=
 YT_SEARCH_MODE=broad
 YOUTUBE_CHANNEL_IDS=
+# YT_PROXY_URL=
 ```
 
-Use `YT_SEARCH_MODE=channels` with `YOUTUBE_CHANNEL_IDS` to avoid broad YouTube search. In
-that mode, YouTube discovery only checks recent videos from those channels.
+What needs what:
 
-`YOUTUBE_CHANNEL_IDS` accepts a comma- or newline-separated list where each entry may be a
-channel ID (`UC…`), an `@handle`, or a channel URL (`/channel/UC…`, `/@handle`, `/user/name`,
-`/c/name`); handles and URLs are resolved to channel IDs via the Data API. Each entry may carry
-per-channel overrides after a `|`, for example:
+- **`net_razor_yt_search`** (query search) needs a **YouTube Data API key** (`YOUTUBE_API_KEY`).
+- **`net_razor_yt_channel_digest`** and **`net_razor_yt_transcript`** need **no API key** — they
+  use YouTube's public RSS feeds and transcript endpoints. Set `YT_PROXY_URL` to route those
+  unauthenticated requests through a (residential) proxy; see [Safety notes](#safety-notes).
+
+`YT_SEARCH_MODE` controls the query-search tool: `broad` (the default) searches all of YouTube;
+`channels` restricts it to the channels in `YOUTUBE_CHANNEL_IDS`.
+
+### Configuring channels
+
+`YOUTUBE_CHANNEL_IDS` is a comma- or newline-separated list. Each entry identifies one channel
+and may be written in any of these forms:
+
+| Form | Example |
+| --- | --- |
+| Channel ID — a `UC` + 22-character identifier | `UCsBjURrPoezykLs9EqgamOA` |
+| `@handle` | `@Fireship` |
+| Channel URL (`/channel/UC…`, `/@handle`, `/user/name`, `/c/name`) | `https://youtube.com/@Fireship` |
+
+A channel ID is the stable `UC…` string YouTube assigns each channel; you can read it from a
+channel page URL under `/channel/`. Handles and non-ID URLs are resolved to their channel ID by
+reading the public channel page (no API key) on first use, then cached — so any form works. A
+bare `UC…` ID or a `/channel/UC…` URL skips even that lookup.
+
+Each entry may append per-channel overrides after a `|`. In the example below, `@Fireship` is
+capped at 10 videos over the last 14 days, while the second channel (given by its channel ID)
+uses the defaults:
 
 ```dotenv
-YOUTUBE_CHANNEL_IDS=@Fireship | videos=10 days=14, UCabc...xyz
+YOUTUBE_CHANNEL_IDS=@Fireship | videos=10 days=14, UCsBjURrPoezykLs9EqgamOA
 ```
 
-The `net_razor_yt_channel_digest` tool pulls the latest videos (plus transcripts) for each
-configured channel and returns them **grouped per channel**, rather than merged into one list.
-Pass `channels` to override the configured set for a single call.
+| Override | Meaning | Default |
+| --- | --- | --- |
+| `videos=N` | Maximum videos to pull from this channel | the `videos_per_channel` value (5) |
+| `days=N` | Lookback window for this channel, in days | the `days` value (7) |
+
+These overrides apply to the channel digest below; `YT_SEARCH_MODE=channels` search ignores them.
+
+### Channel digest
+
+The `net_razor_yt_channel_digest` tool (CLI: `net-razor yt-channel-digest`) walks each
+configured channel, pulls its most recent uploads within the time window, fetches transcripts for
+the top few, and returns the results **grouped per channel** — each channel keeps its own list
+instead of everything being merged and re-ranked into one feed. It records a parent audit call
+with one child call per channel.
+
+It is **key-free**: discovery reads each channel's public RSS feed
+(`youtube.com/feeds/videos.xml?channel_id=…`) rather than the Data API, so no `YOUTUBE_API_KEY`
+is involved and nothing is tied to a Google account. Two consequences of the RSS source: only a
+channel's roughly-15 most recent uploads are visible (no deep history), and items carry view
+counts but not likes/comments. Both discovery and transcripts honor `YT_PROXY_URL`.
+
+All of its parameters are optional:
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `days` | Lookback window, in days | `7` |
+| `videos_per_channel` | Maximum videos per channel | `5` |
+| `transcript_limit_per_channel` | How many of each channel's videos to fetch transcripts for | `2` |
+| `fetch_transcripts` | Whether to fetch transcripts at all | `true` |
+| `channels` | Channels to use for this one call instead of `YOUTUBE_CHANNEL_IDS` (same forms as above) | the configured channels |
+
+Per-channel `videos`/`days` overrides in `YOUTUBE_CHANNEL_IDS` take precedence over the
+`videos_per_channel`/`days` parameters for the channels that set them.
 
 ## MCP
 
@@ -132,7 +183,8 @@ The composition root (`net_razor.app.create_app`) wires together:
   `errors`), written for every tool call by the audit recorder
 - X search via the vendored, subprocess-isolated Node backend
 - Hacker News search via the Algolia HN API
-- YouTube discovery and transcript retrieval (transcripts fetched off the event loop)
+- YouTube query search via the Data API; the channel digest via key-free RSS; transcripts fetched
+  off the event loop (and proxied when `YT_PROXY_URL` is set)
 - A `research` tool that fans out concurrently to the selected sources and returns results
   **grouped by source, unranked**. It records a parent audit call whose children are the
   per-source calls.
@@ -155,5 +207,11 @@ than a date.
 - X cookies and all other secrets stay only in the local `.env`.
 - MCP and CLI responses must not include cookies, auth headers, browser storage, or secrets.
 - `.env`, the local audit database, logs, and local caches are ignored by Git.
+- The channel digest and transcript fetch are **unauthenticated** (public RSS + transcript
+  endpoints): no API key, no login cookies, nothing tied to a Google account. Their only risk is
+  an **IP-level block** from YouTube — so set `YT_PROXY_URL` to a residential proxy and keep the
+  request rate modest. Never attach account cookies to these paths; doing so would put the
+  account, not just an IP, at risk. The Data API used by `yt_search` is separate and identified
+  by its key regardless of IP, so it is left un-proxied.
 - If `net-razor` or another module is not found, run:
   `./.venv/bin/python -m pip install -e ".[dev]"`.

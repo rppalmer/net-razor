@@ -17,9 +17,10 @@ ChannelKind = Literal["id", "handle", "username"]
 class ChannelRef:
     """A parsed reference to a channel from config or a request.
 
-    ``kind == "id"`` is resolvable with no API call. ``handle``/``username`` need
-    a ``channels.list`` lookup to become a channel ID. ``videos_per_channel`` and
-    ``days`` are optional per-channel overrides (see the ``| videos= days=`` syntax).
+    ``kind == "id"`` is resolvable with no lookup. ``handle``/``username`` need a
+    lookup (the Data API, or a key-free channel-page fetch) to become a channel ID.
+    ``videos_per_channel`` and ``days`` are optional per-channel overrides (see the
+    ``| videos= days=`` syntax).
     """
 
     raw: str
@@ -27,6 +28,26 @@ class ChannelRef:
     value: str
     videos_per_channel: int | None = None
     days: int | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedChannel:
+    """A channel reference that has been resolved to a concrete channel ID."""
+
+    source_ref: ChannelRef
+    channel_id: str
+    title: str | None = None
+
+
+def dedupe_resolved(channels: list[ResolvedChannel]) -> list[ResolvedChannel]:
+    seen: set[str] = set()
+    deduped: list[ResolvedChannel] = []
+    for channel in channels:
+        if channel.channel_id in seen:
+            continue
+        seen.add(channel.channel_id)
+        deduped.append(channel)
+    return deduped
 
 
 def parse_channel_refs(text: str) -> list[ChannelRef]:

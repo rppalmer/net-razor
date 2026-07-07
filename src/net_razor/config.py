@@ -56,7 +56,10 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("YOUTUBE_CHANNEL_IDS", "YT_CHANNEL_IDS"),
     )
-    yt_transcript_proxy_url: SecretStr | None = None
+    yt_transcript_proxy_url: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("YT_TRANSCRIPT_PROXY_URL", "YT_PROXY_URL"),
+    )
 
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)

@@ -26,8 +26,9 @@ from net_razor.sources.hn import HNSource, HttpHNClient
 from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
-from net_razor.sources.yt.channel_ref import ChannelRef, parse_channel_refs
-from net_razor.sources.yt.search_client import HttpYouTubeSearchClient, ResolvedChannel
+from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel, parse_channel_refs
+from net_razor.sources.yt.rss_client import YouTubeRssClient
+from net_razor.sources.yt.search_client import HttpYouTubeSearchClient
 from net_razor.sources.yt.transcript_client import YouTubeTranscriptClient
 
 _SOURCE_LABELS = {"x": "X", "hn": "HN", "yt": "YT"}
@@ -83,11 +84,6 @@ class App:
             )
             refs = self._digest_refs(request)
 
-            if self.settings.youtube_api_key_value is None:
-                return self._digest_early_return(
-                    call, window, "configuration_missing",
-                    "YouTube channel digest requires YOUTUBE_API_KEY",
-                )
             if not refs:
                 return self._digest_early_return(
                     call, window, "no_channels_configured",
@@ -204,6 +200,8 @@ class App:
                     "search_mode": self.settings.yt_search_mode,
                     "configured_channel_count": len(self.settings.youtube_channel_id_list),
                     "transcript_available": True,
+                    "channel_digest_backend": "rss",
+                    "channel_digest_requires_api_key": False,
                     "time_filter": "applies_to_search_not_direct_transcript_fetch",
                 },
             ]
@@ -380,7 +378,6 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
 
     transcript_client = YouTubeTranscriptClient(resolved.proxy_url_value)
     search_client = None
-    digest_client = None
     if resolved.youtube_api_key_value:
         search_client = HttpYouTubeSearchClient(
             api_key=resolved.youtube_api_key_value,
@@ -392,22 +389,19 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
                 else None
             ),
         )
-        # The digest addresses channels per request, so it never binds channels
-        # at construction time — but it needs its own broad client instance.
-        digest_client = HttpYouTubeSearchClient(
-            api_key=resolved.youtube_api_key_value,
-            base_url=resolved.youtube_api_base_url,
-            timeout_seconds=resolved.request_timeout_seconds,
-        )
-    # A broad-mode search still requires YOUTUBE_API_KEY; channel-mode also needs
-    # configured channels. Gate yt_source's search behind youtube_search_configured.
+    # yt_search (query search) still uses the Data API; gate it on configuration.
     yt_source = YTSource(
         search_client=search_client if resolved.youtube_search_configured else None,
         transcript_client=transcript_client,
     )
     yt_transcript_fetcher = YTTranscriptFetcher(transcript_client)
+    # The channel digest is key-free: RSS discovery + proxied transcripts, no API key.
     yt_channel_digest_source = YTChannelDigest(
-        search_client=digest_client, transcript_client=transcript_client
+        discovery=YouTubeRssClient(
+            proxy_url=resolved.proxy_url_value,
+            timeout_seconds=resolved.request_timeout_seconds,
+        ),
+        transcript_client=transcript_client,
     )
 
     return App(
