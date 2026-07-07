@@ -2,28 +2,56 @@
 
 Roadmap and parked ideas. Nothing here is committed to a release.
 
-## YouTube: per-channel summaries
+## Reddit: read-only source (unauthenticated-first, OAuth upgrade path)
 
-Goal: pin a set of YouTube channels in config and get summaries for just those
-channels, instead of broad search.
+Goal: pull recent Reddit discussion for a topic as another evidence source,
+audited like the rest. Kept read-only.
 
-Current state (partial — already works):
+Access decision (why it's shaped this way):
 
-- `YT_SEARCH_MODE=channels` plus `YOUTUBE_CHANNEL_IDS` (comma/newline-separated
-  channel IDs) restricts `yt_search` to recent videos from those channels. See
-  `config.youtube_channel_id_list` and the channel path in
-  `HttpYouTubeSearchClient`.
+- The clean path is the **official OAuth Data API** via a registered *script*
+  app (free personal tier, ~60–100 req/min). Prefer it whenever a key is
+  available.
+- In practice app creation is gated behind Reddit's Responsible Builder Policy
+  and may be **denied for a given account** (unverified email / new / flagged),
+  which is the state we're in. When no key can be obtained, fall back to
+  unauthenticated fetch.
+- **Do not** use browser session-cookie replay. It's a clearer ToS violation and
+  risks the *account*, with no gain over the unauthenticated path for public
+  subs. (This differs from the X backend, where cookie auth is the only viable
+  option — Reddit has a real free API, X does not.)
 
-Still to do:
+Shape (fits the current architecture):
 
-- A first-class config shape for the channel list. Today it's a delimited string;
-  accept a clean array / one-per-line and validate that IDs look like `UC...`.
-- Resolve `@handles` and channel URLs to channel IDs, so either can be pasted.
-- A dedicated "channel digest" tool: for each configured channel, pull the latest
-  N videos in a window, fetch transcripts, and return a compact **per-channel**
-  summary (kept separate, not merged into one list) — audited like every other
-  call.
-- Optional per-channel overrides (video count, lookback window).
+- A pure source adapter, e.g. `src/net_razor/sources/reddit.py`, behind the same
+  audit boundary as the other sources — no separate service, no ports.
+- **Transport is pluggable so the auth mode is swappable without touching the
+  source:** an unauthenticated client (default) and an OAuth client (if/when a
+  key exists), both returning the same raw JSON shape to `_normalize`.
+
+Unauthenticated client (default fallback):
+
+- Runs from the **local / residential IP** — this is what dodges the datacenter
+  403 (WAF/IP-reputation block) seen when testing from a datacenter.
+- Discovery via `.rss` feeds (published feeds, grayest-but-safest); thread bodies
+  and comments via the `.json` suffix on permalinks.
+- **Low rate on purpose:** a couple req/sec max, honest descriptive
+  `User-Agent`, read-only. No auth, no login, no cookies.
+- Expect and handle 429 (back off) and 403 (surface as a handled error, don't
+  retry-storm) — same handled-error discipline as the other sources.
+- Note the `more` / comment-tree truncation limitation: deep threads are
+  truncated by the API shape; full expansion needs `/api/morechildren`, which is
+  really only practical with OAuth rate headroom.
+
+OAuth client (upgrade path, if a key becomes available):
+
+- Script-app credentials in `.env`: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`,
+  `REDDIT_USER_AGENT` (same secrets pattern as X/YouTube; never committed).
+- Talk to `oauth.reddit.com`; gains higher limits + gated content + real
+  `morechildren` expansion. Swap it in behind the same source interface.
+
+Extract per item: subreddit, title, self-text/body, author, permalink (canonical
+URL), score, num_comments, created_at, and top-level comment text for context.
 
 ## Polymarket: read-only trend/context signal
 
