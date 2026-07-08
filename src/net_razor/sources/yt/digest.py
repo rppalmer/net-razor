@@ -48,6 +48,7 @@ class YTChannelDigest:
             "fetch_transcripts": leg.fetch_transcripts,
             "transcript_limit": leg.transcript_limit,
             "only_new": leg.only_new,
+            "require_transcript": leg.require_transcript,
             "window": window.as_dict(),
         }
         meta_base = {"channel_id": leg.channel_id, "channel_title": leg.channel_title}
@@ -81,22 +82,33 @@ class YTChannelDigest:
             skipped_seen = len(candidates) - len(kept)
             candidates = kept
 
-        want = leg.transcript_limit if leg.fetch_transcripts else 0
+        # require_transcript forces a transcript attempt on every candidate (so a
+        # caption-less video high in the list doesn't crowd out ones that have captions).
+        if leg.require_transcript:
+            want = len(candidates)
+        else:
+            want = leg.transcript_limit if leg.fetch_transcripts else 0
         transcripts, errors = await fetch_transcripts(
             self._transcript_client, candidates, want, leg.languages
         )
 
         items: list[EvidenceItem] = []
         raw: dict[str, dict[str, Any]] = {}
+        skipped_no_transcript = 0
         for index, candidate in enumerate(candidates):
             transcript = transcripts.get(index)
             transcript_text = transcript[0] if transcript else None
             transcript_meta = transcript[1] if transcript else None
-            items.append(candidate_to_item(candidate, leg.query_label, transcript_text))
             raw[candidate.video_id] = {
                 "video_id": candidate.video_id,
                 "transcript": transcript_meta,
             }
+            # When transcripts are required, drop videos that yielded none (e.g. captions
+            # disabled) rather than returning the description as a stand-in.
+            if leg.require_transcript and not transcript_text:
+                skipped_no_transcript += 1
+                continue
+            items.append(candidate_to_item(candidate, leg.query_label, transcript_text))
 
         # Prefer the channel title from the feed over any placeholder on the leg.
         channel_title = leg.channel_title or (candidates[0].channel_title if candidates else "")
@@ -106,8 +118,8 @@ class YTChannelDigest:
         )
         return FetchResult(
             items=items, raw=raw, errors=errors, effective_request=effective,
-            meta={**meta_base, "channel_title": channel_title,
-                  "video_count": len(items), "skipped_seen": skipped_seen},
+            meta={**meta_base, "channel_title": channel_title, "video_count": len(items),
+                  "skipped_seen": skipped_seen, "skipped_no_transcript": skipped_no_transcript},
         )
 
 

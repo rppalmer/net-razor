@@ -116,6 +116,28 @@ async def test_digest_fetch_skips_excluded_before_transcripts():
 
 
 @pytest.mark.asyncio
+async def test_digest_require_transcript_skips_captionless():
+    from youtube_transcript_api._errors import TranscriptsDisabled
+
+    class _MixedTranscripts:
+        def fetch(self, video_id, languages):
+            if video_id == "viddisabled":
+                raise TranscriptsDisabled(video_id)
+            return _FakeTranscript()
+
+    discovery = _FakeDiscovery([_candidate("viddisabled"), _candidate("vidokay0001")])
+    digest = YTChannelDigest(discovery=discovery, transcript_client=_MixedTranscripts())
+    leg = _leg("UCxxxxxxxxxxxxxxxxxxxxxx", require_transcript=True)
+
+    result = await digest.fetch(leg, WINDOW)
+    # the caption-less video is dropped, not returned as a description stand-in
+    assert [it.source_id for it in result.items] == ["vidokay0001"]
+    assert result.items[0].item_type == "transcript"
+    assert result.meta["skipped_no_transcript"] == 1
+    assert result.errors[0].type == "transcripts_disabled"
+
+
+@pytest.mark.asyncio
 async def test_digest_fetch_maps_403_to_blocked():
     request = httpx.Request("GET", "https://www.youtube.com/feeds/videos.xml")
     blocked = httpx.HTTPStatusError(

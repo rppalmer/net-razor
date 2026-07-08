@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # storage / runtime
     database_path: Path = _REPO_ROOT / "data" / "net_razor_audit.db"
     log_level: str = "INFO"
+    # Optional log file. Under an MCP host, the server's stderr is often discarded, so
+    # set LOG_FILE to capture logs reliably (e.g. logs/net-razor.log).
+    log_file: Path | None = None
 
     # X
     auth_token: SecretStr | None = None
@@ -62,6 +65,8 @@ class Settings(BaseSettings):
     )
     # Default for the channel digest's cross-run dedup when a call doesn't set only_new.
     yt_digest_only_new: bool = False
+    # Default for skipping videos without a fetchable transcript (e.g. captions disabled).
+    yt_digest_require_transcript: bool = False
 
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)
@@ -69,6 +74,13 @@ class Settings(BaseSettings):
     @field_validator("database_path")
     @classmethod
     def _resolve_database_path(cls, value: Path) -> Path:
+        return value if value.is_absolute() else _REPO_ROOT / value
+
+    @field_validator("log_file")
+    @classmethod
+    def _resolve_log_file(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
         return value if value.is_absolute() else _REPO_ROOT / value
 
     @field_validator("yt_search_mode")

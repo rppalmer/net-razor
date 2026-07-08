@@ -92,6 +92,7 @@ class _StubSettings:
     youtube_api_key_value = None
     proxy_url_value = None
     yt_digest_only_new = False
+    yt_digest_require_transcript = False
 
     @property
     def database_path(self):  # pragma: no cover - not used by these tests

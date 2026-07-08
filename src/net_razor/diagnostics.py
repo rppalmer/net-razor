@@ -65,6 +65,8 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
             "repo_root": str(repo_root),
             "working_directory": str(Path.cwd()),
             "launch": "python -m net_razor.mcp",
+            "log_level": settings.log_level,
+            "log_file": str(settings.log_file) if settings.log_file else "stderr only",
         },
         "storage": {
             "database_path": str(settings.database_path),

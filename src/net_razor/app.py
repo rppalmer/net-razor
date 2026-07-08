@@ -96,12 +96,20 @@ class App:
                 if request.only_new is not None
                 else self.settings.yt_digest_only_new
             )
+            require_transcript = (
+                request.require_transcript
+                if request.require_transcript is not None
+                else self.settings.yt_digest_require_transcript
+            )
             seen = (
                 self.store.seen_source_ids(tool="yt_channel_digest", source="yt")
                 if only_new
                 else set()
             )
-            legs = [self._digest_leg(request, channel, seen, only_new) for channel in resolved]
+            legs = [
+                self._digest_leg(request, channel, seen, only_new, require_transcript)
+                for channel in resolved
+            ]
             results = await asyncio.gather(
                 *(
                     self._search_tool(
@@ -284,6 +292,7 @@ class App:
         channel: ResolvedChannel,
         seen: set[str],
         only_new: bool,
+        require_transcript: bool,
     ) -> YTChannelLeg:
         ref = channel.source_ref
         videos = min(ref.videos_per_channel or request.videos_per_channel, 25)
@@ -296,6 +305,7 @@ class App:
             languages=request.languages,
             query_label=ref.raw,
             only_new=only_new,
+            require_transcript=require_transcript,
             exclude_video_ids=list(seen),
         )
 
@@ -332,6 +342,7 @@ class App:
                 "channel_title": result.get("channel_title") or leg.channel_title,
                 "video_count": len(items),
                 "skipped_seen": result.get("skipped_seen", 0),
+                "skipped_no_transcript": result.get("skipped_no_transcript", 0),
                 "call_id": result["call_id"],
                 "items": items,
                 "errors": result["errors"],
@@ -381,7 +392,7 @@ class App:
 
 def create_app(*, settings: Settings | None = None, clock: Clock | None = None) -> App:
     resolved = settings or get_settings()
-    configure_json_logging(resolved.log_level)
+    configure_json_logging(resolved.log_level, resolved.log_file)
     system_clock = clock or SystemClock()
 
     store = AuditStore(resolved.database_path)

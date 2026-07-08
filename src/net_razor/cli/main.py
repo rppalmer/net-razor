@@ -90,6 +90,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip videos already returned by a prior digest (dedup across runs). "
              "Defaults to YT_DIGEST_ONLY_NEW when omitted.",
     )
+    yt_digest.add_argument(
+        "--require-transcript", action=argparse.BooleanOptionalAction, default=None,
+        help="Skip videos with no fetchable transcript (e.g. captions disabled). "
+             "Defaults to YT_DIGEST_REQUIRE_TRANSCRIPT when omitted.",
+    )
 
     yt_transcript = subparsers.add_parser("yt-transcript", help="Fetch one YouTube transcript.")
     yt_transcript.add_argument("url")
@@ -177,6 +182,7 @@ async def run_command(args: argparse.Namespace) -> int:
                     fetch_transcripts=args.fetch_transcripts,
                     channels=_csv_values(args.channels),
                     only_new=args.only_new,
+                    require_transcript=args.require_transcript,
                 )
             )
         )

@@ -190,6 +190,9 @@ class YTChannelDigestRequest(BaseModel):
     # Drop videos already returned by a prior digest run (dedup across daily runs).
     # None -> fall back to the YT_DIGEST_ONLY_NEW config default.
     only_new: bool | None = None
+    # Skip videos with no fetchable transcript (e.g. captions disabled) instead of
+    # falling back to the description. None -> YT_DIGEST_REQUIRE_TRANSCRIPT default.
+    require_transcript: bool | None = None
 
     @field_validator("channels")
     @classmethod
@@ -222,6 +225,7 @@ class YTChannelLeg(BaseModel):
     languages: list[str] = Field(min_length=1)
     query_label: str
     only_new: bool = False
+    require_transcript: bool = False
     # Video IDs to skip (already seen). Excluded from the audit dump — the set can be
     # large and grows over time; only the ``only_new`` flag and skip count are recorded.
     exclude_video_ids: list[str] = Field(default_factory=list, exclude=True)

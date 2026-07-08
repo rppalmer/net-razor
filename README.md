@@ -109,6 +109,7 @@ All of its parameters are optional:
 | `fetch_transcripts` | Whether to fetch transcripts at all | `true` |
 | `channels` | Channels to use for this one call instead of `YOUTUBE_CHANNEL_IDS` (same forms as above) | the configured channels |
 | `only_new` | Skip videos already returned by a prior digest run (dedup across runs) | `YT_DIGEST_ONLY_NEW` (`false`) |
+| `require_transcript` | Skip videos with no fetchable transcript (e.g. captions disabled) instead of falling back to the description | `YT_DIGEST_REQUIRE_TRANSCRIPT` (`false`) |
 
 Per-channel `videos`/`days` overrides in `YOUTUBE_CHANNEL_IDS` take precedence over the
 `videos_per_channel`/`days` parameters for the channels that set them.
@@ -124,6 +125,14 @@ one:
 ```bash
 .venv/bin/net-razor yt-channel-digest --only-new --days 7
 ```
+
+**Transcript availability.** Each item's `item_type` says what its `text` is: `transcript` means
+`text` is the real transcript; `video` means no transcript was available (captions disabled, or
+beyond the fetch limit) and `text` falls back to the video's **description**. The per-channel
+`errors` array records why a transcript was missing (e.g. `transcripts_disabled`). Set
+`require_transcript` (or `YT_DIGEST_REQUIRE_TRANSCRIPT=true`) to drop the no-transcript videos
+entirely — each channel then reports a `skipped_no_transcript` count. This is useful for channels
+that mix regular uploads with caption-less livestreams.
 
 ## MCP
 
@@ -170,6 +179,11 @@ Manual MCP smoke test:
 
 If the smoke test works but the MCP host stays on `connecting`, verify that the host points at
 the same checkout, uses that checkout's `.venv` interpreter, and has reloaded the current config.
+
+**Logs.** The server logs JSON to **stderr** — stdout is reserved for the MCP protocol. MCP hosts
+frequently discard a server's stderr, so to capture logs reliably set `LOG_FILE` in `.env` (e.g.
+`LOG_FILE=logs/net-razor.log`) and `tail -f` it. `net-razor doctor` shows the active `log_level`
+and `log_file` under `runtime`.
 
 ## CLI
 
