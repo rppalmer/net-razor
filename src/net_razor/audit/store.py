@@ -240,6 +240,19 @@ class AuditStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def seen_source_ids(self, *, tool: str, source: str) -> set[str]:
+        """Source IDs already returned by prior calls of a tool (for cross-run dedup)."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT i.source_id
+                FROM items i JOIN calls c ON c.id = i.call_id
+                WHERE c.tool = ? AND i.source = ?
+                """,
+                (tool, source),
+            ).fetchall()
+        return {row["source_id"] for row in rows}
+
     def get_call(self, call_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             call = connection.execute(

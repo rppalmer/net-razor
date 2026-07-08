@@ -60,6 +60,8 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("YT_TRANSCRIPT_PROXY_URL", "YT_PROXY_URL"),
     )
+    # Default for the channel digest's cross-run dedup when a call doesn't set only_new.
+    yt_digest_only_new: bool = False
 
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)

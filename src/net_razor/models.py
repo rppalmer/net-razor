@@ -187,6 +187,9 @@ class YTChannelDigestRequest(BaseModel):
     fetch_transcripts: bool = True
     transcript_limit_per_channel: int = Field(default=2, ge=0, le=10)
     languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
+    # Drop videos already returned by a prior digest run (dedup across daily runs).
+    # None -> fall back to the YT_DIGEST_ONLY_NEW config default.
+    only_new: bool | None = None
 
     @field_validator("channels")
     @classmethod
@@ -218,6 +221,10 @@ class YTChannelLeg(BaseModel):
     transcript_limit: int = Field(ge=0, le=10)
     languages: list[str] = Field(min_length=1)
     query_label: str
+    only_new: bool = False
+    # Video IDs to skip (already seen). Excluded from the audit dump — the set can be
+    # large and grows over time; only the ``only_new`` flag and skip count are recorded.
+    exclude_video_ids: list[str] = Field(default_factory=list, exclude=True)
 
 
 class ResearchRequest(BaseModel):

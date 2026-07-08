@@ -47,6 +47,7 @@ class YTChannelDigest:
             "videos_per_channel": leg.videos_per_channel,
             "fetch_transcripts": leg.fetch_transcripts,
             "transcript_limit": leg.transcript_limit,
+            "only_new": leg.only_new,
             "window": window.as_dict(),
         }
         meta_base = {"channel_id": leg.channel_id, "channel_title": leg.channel_title}
@@ -71,6 +72,14 @@ class YTChannelDigest:
                 effective, meta_base, "request_failed",
                 "YouTube RSS feed request failed", {"reason": str(exc)},
             )
+
+        # Drop already-seen videos before the (expensive) transcript fetch.
+        skipped_seen = 0
+        if leg.exclude_video_ids:
+            excluded = set(leg.exclude_video_ids)
+            kept = [c for c in candidates if c.video_id not in excluded]
+            skipped_seen = len(candidates) - len(kept)
+            candidates = kept
 
         want = leg.transcript_limit if leg.fetch_transcripts else 0
         transcripts, errors = await fetch_transcripts(
@@ -97,7 +106,8 @@ class YTChannelDigest:
         )
         return FetchResult(
             items=items, raw=raw, errors=errors, effective_request=effective,
-            meta={**meta_base, "channel_title": channel_title, "video_count": len(items)},
+            meta={**meta_base, "channel_title": channel_title,
+                  "video_count": len(items), "skipped_seen": skipped_seen},
         )
 
 

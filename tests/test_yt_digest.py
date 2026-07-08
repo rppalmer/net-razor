@@ -94,6 +94,28 @@ async def test_digest_fetch_attaches_transcript_and_channel_meta():
 
 
 @pytest.mark.asyncio
+async def test_digest_fetch_skips_excluded_before_transcripts():
+    class _CountingTranscripts:
+        def __init__(self):
+            self.fetched: list[str] = []
+
+        def fetch(self, video_id, languages):
+            self.fetched.append(video_id)
+            return _FakeTranscript()
+
+    transcripts = _CountingTranscripts()
+    discovery = _FakeDiscovery([_candidate("vidkeepaaaa"), _candidate("vidseen0001")])
+    digest = YTChannelDigest(discovery=discovery, transcript_client=transcripts)
+    leg = _leg("UCxxxxxxxxxxxxxxxxxxxxxx", exclude_video_ids=["vidseen0001"], only_new=True)
+
+    result = await digest.fetch(leg, WINDOW)
+    assert [it.source_id for it in result.items] == ["vidkeepaaaa"]
+    assert result.meta["skipped_seen"] == 1
+    # the excluded video never reaches the (expensive) transcript fetch
+    assert transcripts.fetched == ["vidkeepaaaa"]
+
+
+@pytest.mark.asyncio
 async def test_digest_fetch_maps_403_to_blocked():
     request = httpx.Request("GET", "https://www.youtube.com/feeds/videos.xml")
     blocked = httpx.HTTPStatusError(
@@ -122,13 +144,16 @@ class _AppFakeDigest:
         return self._resolved, self._unresolved
 
     async def fetch(self, leg, window):
-        items = self._items.get(leg.channel_id, [])
+        excluded = set(leg.exclude_video_ids)
+        all_items = self._items.get(leg.channel_id, [])
+        items = [it for it in all_items if it.source_id not in excluded]
         return FetchResult(
             items=items, raw={}, errors=[],
             effective_request={"channel_id": leg.channel_id},
             meta={"channel_id": leg.channel_id,
                   "channel_title": f"Title {leg.channel_id}",
-                  "video_count": len(items)},
+                  "video_count": len(items),
+                  "skipped_seen": len(all_items) - len(items)},
         )
 
 
@@ -167,6 +192,46 @@ async def test_app_digest_groups_per_channel_and_surfaces_unresolved(make_app):
     assert len(runs) == 1 and runs[0]["tool"] == "yt_channel_digest"
     detail = app.run_detail(response["call_id"])
     assert len(detail["children"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_app_digest_only_new_skips_previously_seen(make_app):
+    item = _item("vidalpha0001")
+    resolved = [
+        ResolvedChannel(source_ref=ChannelRef("@aaa", "handle", "aaa"), channel_id="UC1", title="A")
+    ]
+    digest = _AppFakeDigest(resolved=resolved, unresolved=[], items_by_channel={"UC1": [item]})
+    app = make_app(yt_digest=digest)
+
+    first = await app.yt_channel_digest(YTChannelDigestRequest(channels=["@aaa"]))
+    assert first["channels"][0]["video_count"] == 1  # first run returns it
+
+    second = await app.yt_channel_digest(
+        YTChannelDigestRequest(channels=["@aaa"], only_new=True)
+    )
+    assert second["channels"][0]["video_count"] == 0  # already seen -> skipped
+    assert second["channels"][0]["skipped_seen"] == 1
+
+
+@pytest.mark.asyncio
+async def test_app_digest_only_new_defaults_from_config(make_app):
+    from tests.conftest import _StubSettings
+
+    class _OnlyNewSettings(_StubSettings):
+        yt_digest_only_new = True
+
+    item = _item("vidcfg00001")
+    resolved = [
+        ResolvedChannel(source_ref=ChannelRef("@aaa", "handle", "aaa"), channel_id="UC1", title="A")
+    ]
+    digest = _AppFakeDigest(resolved=resolved, unresolved=[], items_by_channel={"UC1": [item]})
+    app = make_app(yt_digest=digest, settings=_OnlyNewSettings())
+
+    # only_new omitted on the request -> falls back to the config default (True)
+    first = await app.yt_channel_digest(YTChannelDigestRequest(channels=["@aaa"]))
+    assert first["channels"][0]["video_count"] == 1  # nothing seen yet
+    second = await app.yt_channel_digest(YTChannelDigestRequest(channels=["@aaa"]))
+    assert second["channels"][0]["video_count"] == 0  # config default deduped it
 
 
 @pytest.mark.asyncio

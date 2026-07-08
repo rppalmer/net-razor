@@ -104,6 +104,29 @@ async def test_prune_deletes_old_calls_and_children(store):
     assert store.get_call(new_id) is not None
 
 
+@pytest.mark.asyncio
+async def test_seen_source_ids_scoped_to_tool_and_source(store):
+    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
+
+    def yt_item(vid: str) -> EvidenceItem:
+        return EvidenceItem(
+            source="yt", source_backend="yt-api", source_id=vid,
+            canonical_url=f"https://www.youtube.com/watch?v={vid}", text="t",
+            author=EvidenceAuthor(handle="c", display_name="C"),
+            published_at=datetime(2026, 7, 1, tzinfo=UTC), query_used="@chan",
+        )
+
+    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
+        call.record(effective_request={}, items=[yt_item("vidA"), yt_item("vidB")],
+                    raw={}, errors=[])
+    # a different tool's items must not leak into the digest's seen set
+    async with recorder.call(tool="hn_search", source="hn", request={}) as call:
+        call.record(effective_request={}, items=[_item("hn1")], raw={}, errors=[])
+
+    seen = store.seen_source_ids(tool="yt_channel_digest", source="yt")
+    assert seen == {"vidA", "vidB"}
+
+
 def test_stats_reports_counts_and_size(store):
     stats = store.stats()
     assert set(stats["counts"]) == {"calls", "items", "raw", "errors"}

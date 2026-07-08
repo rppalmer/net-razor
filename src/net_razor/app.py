@@ -91,7 +91,17 @@ class App:
                 )
 
             resolved, unresolved = await self.yt_channel_digest_source.resolve_channels(refs)
-            legs = [self._digest_leg(request, channel) for channel in resolved]
+            only_new = (
+                request.only_new
+                if request.only_new is not None
+                else self.settings.yt_digest_only_new
+            )
+            seen = (
+                self.store.seen_source_ids(tool="yt_channel_digest", source="yt")
+                if only_new
+                else set()
+            )
+            legs = [self._digest_leg(request, channel, seen, only_new) for channel in resolved]
             results = await asyncio.gather(
                 *(
                     self._search_tool(
@@ -269,7 +279,11 @@ class App:
         return self.settings.youtube_channel_refs
 
     def _digest_leg(
-        self, request: YTChannelDigestRequest, channel: ResolvedChannel
+        self,
+        request: YTChannelDigestRequest,
+        channel: ResolvedChannel,
+        seen: set[str],
+        only_new: bool,
     ) -> YTChannelLeg:
         ref = channel.source_ref
         videos = min(ref.videos_per_channel or request.videos_per_channel, 25)
@@ -281,6 +295,8 @@ class App:
             transcript_limit=request.transcript_limit_per_channel,
             languages=request.languages,
             query_label=ref.raw,
+            only_new=only_new,
+            exclude_video_ids=list(seen),
         )
 
     def _digest_leg_window(
@@ -315,6 +331,7 @@ class App:
                 "channel_id": result.get("channel_id", leg.channel_id),
                 "channel_title": result.get("channel_title") or leg.channel_title,
                 "video_count": len(items),
+                "skipped_seen": result.get("skipped_seen", 0),
                 "call_id": result["call_id"],
                 "items": items,
                 "errors": result["errors"],

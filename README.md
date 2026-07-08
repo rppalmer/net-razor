@@ -108,9 +108,22 @@ All of its parameters are optional:
 | `transcript_limit_per_channel` | How many of each channel's videos to fetch transcripts for | `2` |
 | `fetch_transcripts` | Whether to fetch transcripts at all | `true` |
 | `channels` | Channels to use for this one call instead of `YOUTUBE_CHANNEL_IDS` (same forms as above) | the configured channels |
+| `only_new` | Skip videos already returned by a prior digest run (dedup across runs) | `YT_DIGEST_ONLY_NEW` (`false`) |
 
 Per-channel `videos`/`days` overrides in `YOUTUBE_CHANNEL_IDS` take precedence over the
 `videos_per_channel`/`days` parameters for the channels that set them.
+
+**Deduplicating across daily runs.** `only_new` drops any video already returned by an earlier
+digest — it reads the video IDs straight from the audit store, so no external state is needed.
+Each channel then reports a `skipped_seen` count. When a call omits `only_new`, it follows the
+`YT_DIGEST_ONLY_NEW` config default; set `YT_DIGEST_ONLY_NEW=true` to make dedup the default for a
+scheduled run. Because dedup absorbs overlap, you can safely widen the window as a catch-up
+safety net — e.g. a daily job with `--only-new --days 7` never misses a video and never repeats
+one:
+
+```bash
+.venv/bin/net-razor yt-channel-digest --only-new --days 7
+```
 
 ## MCP
 

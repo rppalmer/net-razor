@@ -108,10 +108,13 @@ def create_server(app: App | None = None) -> FastMCP:
         transcript_limit_per_channel: int = 2,
         fetch_transcripts: bool = True,
         channels: list[str] | None = None,
+        only_new: bool | None = None,
     ) -> dict[str, Any]:
         """Per-channel YouTube digest: for each configured (or supplied) channel,
         pull its latest videos in the window and attach transcripts. Results are
-        grouped per channel, not merged into one list (audited)."""
+        grouped per channel, not merged into one list (audited). only_new skips videos
+        already returned by a prior digest (dedup across daily runs); when omitted it
+        follows the YT_DIGEST_ONLY_NEW config default."""
 
         return await net_razor_app.yt_channel_digest(
             YTChannelDigestRequest(
@@ -120,6 +123,7 @@ def create_server(app: App | None = None) -> FastMCP:
                 transcript_limit_per_channel=transcript_limit_per_channel,
                 fetch_transcripts=fetch_transcripts,
                 channels=channels or [],
+                only_new=only_new,
             )
         )
 

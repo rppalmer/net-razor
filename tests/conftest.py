@@ -91,6 +91,7 @@ class _StubSettings:
     node_binary = "node"
     youtube_api_key_value = None
     proxy_url_value = None
+    yt_digest_only_new = False
 
     @property
     def database_path(self):  # pragma: no cover - not used by these tests
