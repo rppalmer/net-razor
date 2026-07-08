@@ -55,6 +55,8 @@ class EvidenceItem(BaseModel):
     published_at: datetime
     engagement: EvidenceEngagement = Field(default_factory=EvidenceEngagement)
     query_used: str
+    # True when ``text`` was capped (e.g. a long transcript trimmed to the char limit).
+    truncated: bool = False
 
     @field_validator("source_id", "canonical_url", "text", "query_used")
     @classmethod
@@ -154,6 +156,9 @@ class YTTranscriptRequest(BaseModel):
     url: str
     languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
     include_segments: bool = True
+    # Cap on returned transcript text; None -> YT_MAX_TRANSCRIPT_CHARS. 0 = no cap
+    # (pass 0 to get the complete transcript of a video that was truncated in a digest).
+    max_chars: int | None = Field(default=None, ge=0)
 
     @field_validator("url")
     @classmethod
@@ -193,6 +198,8 @@ class YTChannelDigestRequest(BaseModel):
     # Skip videos with no fetchable transcript (e.g. captions disabled) instead of
     # falling back to the description. None -> YT_DIGEST_REQUIRE_TRANSCRIPT default.
     require_transcript: bool | None = None
+    # Cap on each transcript's characters; None -> YT_MAX_TRANSCRIPT_CHARS. 0 = no cap.
+    max_transcript_chars: int | None = Field(default=None, ge=0)
 
     @field_validator("channels")
     @classmethod
@@ -226,6 +233,7 @@ class YTChannelLeg(BaseModel):
     query_label: str
     only_new: bool = False
     require_transcript: bool = False
+    max_transcript_chars: int = Field(default=0, ge=0)
     # Video IDs to skip (already seen). Excluded from the audit dump — the set can be
     # large and grows over time; only the ``only_new`` flag and skip count are recorded.
     exclude_video_ids: list[str] = Field(default_factory=list, exclude=True)

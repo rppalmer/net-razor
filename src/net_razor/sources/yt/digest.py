@@ -8,7 +8,7 @@ import httpx
 from net_razor.clock import ResolvedWindow
 from net_razor.models import EvidenceItem, FetchResult, ServiceErrorItem, YTChannelLeg
 from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel
-from net_razor.sources.yt.enrich import candidate_to_item, fetch_transcripts
+from net_razor.sources.yt.enrich import candidate_to_item, cap_text, fetch_transcripts
 from net_razor.sources.yt.rss_client import YouTubeRssClient, YouTubeRssError
 
 
@@ -108,7 +108,12 @@ class YTChannelDigest:
             if leg.require_transcript and not transcript_text:
                 skipped_no_transcript += 1
                 continue
-            items.append(candidate_to_item(candidate, leg.query_label, transcript_text))
+            truncated = False
+            if transcript_text:
+                transcript_text, truncated = cap_text(transcript_text, leg.max_transcript_chars)
+            items.append(
+                candidate_to_item(candidate, leg.query_label, transcript_text, truncated=truncated)
+            )
 
         # Prefer the channel title from the feed over any placeholder on the leg.
         channel_title = leg.channel_title or (candidates[0].channel_title if candidates else "")

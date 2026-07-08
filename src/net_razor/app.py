@@ -60,10 +60,15 @@ class App:
         return await self._search_tool("yt_search", self.yt_source, request)
 
     async def yt_transcript(self, request: YTTranscriptRequest) -> dict[str, Any]:
+        max_chars = (
+            request.max_chars
+            if request.max_chars is not None
+            else self.settings.yt_max_transcript_chars
+        )
         async with self.recorder.call(
             tool="yt_transcript", source="yt", request=request.model_dump(mode="json")
         ) as call:
-            result = await self.yt_transcript_fetcher.transcript(request)
+            result = await self.yt_transcript_fetcher.transcript(request, max_chars=max_chars)
             call.record(
                 effective_request=result.effective_request,
                 items=result.items,
@@ -101,13 +106,20 @@ class App:
                 if request.require_transcript is not None
                 else self.settings.yt_digest_require_transcript
             )
+            max_transcript_chars = (
+                request.max_transcript_chars
+                if request.max_transcript_chars is not None
+                else self.settings.yt_max_transcript_chars
+            )
             seen = (
                 self.store.seen_source_ids(tool="yt_channel_digest", source="yt")
                 if only_new
                 else set()
             )
             legs = [
-                self._digest_leg(request, channel, seen, only_new, require_transcript)
+                self._digest_leg(
+                    request, channel, seen, only_new, require_transcript, max_transcript_chars
+                )
                 for channel in resolved
             ]
             results = await asyncio.gather(
@@ -293,6 +305,7 @@ class App:
         seen: set[str],
         only_new: bool,
         require_transcript: bool,
+        max_transcript_chars: int,
     ) -> YTChannelLeg:
         ref = channel.source_ref
         videos = min(ref.videos_per_channel or request.videos_per_channel, 25)
@@ -306,6 +319,7 @@ class App:
             query_label=ref.raw,
             only_new=only_new,
             require_transcript=require_transcript,
+            max_transcript_chars=max_transcript_chars,
             exclude_video_ids=list(seen),
         )
 
@@ -421,6 +435,7 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
     yt_source = YTSource(
         search_client=search_client if resolved.youtube_search_configured else None,
         transcript_client=transcript_client,
+        max_transcript_chars=resolved.yt_max_transcript_chars,
     )
     yt_transcript_fetcher = YTTranscriptFetcher(transcript_client)
     # The channel digest is key-free: RSS discovery + proxied transcripts, no API key.

@@ -95,12 +95,21 @@ def parse_args() -> argparse.Namespace:
         help="Skip videos with no fetchable transcript (e.g. captions disabled). "
              "Defaults to YT_DIGEST_REQUIRE_TRANSCRIPT when omitted.",
     )
+    yt_digest.add_argument(
+        "--max-transcript-chars", type=int, default=None,
+        help="Cap each transcript's characters (0 = no cap). "
+             "Defaults to YT_MAX_TRANSCRIPT_CHARS when omitted.",
+    )
 
     yt_transcript = subparsers.add_parser("yt-transcript", help="Fetch one YouTube transcript.")
     yt_transcript.add_argument("url")
     yt_transcript.add_argument("--languages", default="en")
     yt_transcript.add_argument(
         "--include-segments", action=argparse.BooleanOptionalAction, default=True
+    )
+    yt_transcript.add_argument(
+        "--max-chars", type=int, default=None,
+        help="Cap transcript characters (0 = full). Defaults to YT_MAX_TRANSCRIPT_CHARS.",
     )
 
     return parser.parse_args()
@@ -183,6 +192,7 @@ async def run_command(args: argparse.Namespace) -> int:
                     channels=_csv_values(args.channels),
                     only_new=args.only_new,
                     require_transcript=args.require_transcript,
+                    max_transcript_chars=args.max_transcript_chars,
                 )
             )
         )
@@ -195,6 +205,7 @@ async def run_command(args: argparse.Namespace) -> int:
                     url=args.url,
                     languages=_csv_values(args.languages),
                     include_segments=args.include_segments,
+                    max_chars=args.max_chars,
                 )
             )
         )

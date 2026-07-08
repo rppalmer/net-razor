@@ -110,6 +110,7 @@ def create_server(app: App | None = None) -> FastMCP:
         channels: list[str] | None = None,
         only_new: bool | None = None,
         require_transcript: bool | None = None,
+        max_transcript_chars: int | None = None,
     ) -> dict[str, Any]:
         """Per-channel YouTube digest: for each configured (or supplied) channel,
         pull its latest videos in the window and attach transcripts. Results are
@@ -127,18 +128,27 @@ def create_server(app: App | None = None) -> FastMCP:
                 channels=channels or [],
                 only_new=only_new,
                 require_transcript=require_transcript,
+                max_transcript_chars=max_transcript_chars,
             )
         )
 
     @mcp.tool()
     async def net_razor_yt_transcript(
-        url: str, languages: list[str] | None = None, include_segments: bool = True
+        url: str,
+        languages: list[str] | None = None,
+        include_segments: bool = True,
+        max_chars: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch a transcript for one YouTube URL or video ID (audited)."""
+        """Fetch a transcript for one YouTube URL or video ID (audited). Text is capped at
+        max_chars (default YT_MAX_TRANSCRIPT_CHARS); pass max_chars=0 for the full transcript.
+        The response includes `truncated` and `full_char_count`."""
 
         return await net_razor_app.yt_transcript(
             YTTranscriptRequest(
-                url=url, languages=languages or ["en"], include_segments=include_segments
+                url=url,
+                languages=languages or ["en"],
+                include_segments=include_segments,
+                max_chars=max_chars,
             )
         )
 

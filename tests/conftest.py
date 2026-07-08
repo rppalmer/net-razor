@@ -64,7 +64,7 @@ def make_app(store, clock):
 
 
 class _StubTranscriptFetcher:
-    async def transcript(self, request):
+    async def transcript(self, request, *, max_chars=0):
         return FetchResult(
             items=[], raw={}, errors=[], effective_request={},
             meta={"response": {"video_id": "", "text": None, "errors": []}},
@@ -93,6 +93,7 @@ class _StubSettings:
     proxy_url_value = None
     yt_digest_only_new = False
     yt_digest_require_transcript = False
+    yt_max_transcript_chars = 0
 
     @property
     def database_path(self):  # pragma: no cover - not used by these tests

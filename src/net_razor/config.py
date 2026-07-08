@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     yt_digest_only_new: bool = False
     # Default for skipping videos without a fetchable transcript (e.g. captions disabled).
     yt_digest_require_transcript: bool = False
+    # Max characters of transcript text returned per video (0 = no cap). ~40k chars
+    # (~10k tokens) covers a ~35-minute video at normal speaking pace; longer videos are
+    # truncated (and flagged). Bounds LLM context regardless of agent/host behavior.
+    yt_max_transcript_chars: int = Field(default=40000, ge=0)
 
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)

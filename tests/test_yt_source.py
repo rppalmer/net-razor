@@ -107,6 +107,32 @@ async def test_yt_transcript_fetcher_success():
 
 
 @pytest.mark.asyncio
+async def test_yt_transcript_fetcher_caps_text():
+    transcript = _FakeTranscript([_Segment("a" * 40, 0.0, 1.0), _Segment("b" * 40, 1.0, 1.0)])
+    fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=transcript))
+    result = await fetcher.transcript(
+        YTTranscriptRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+        max_chars=50,
+    )
+    response = result.meta["response"]
+    assert response["truncated"] is True
+    assert len(response["text"]) == 50
+    assert response["full_char_count"] == 81  # 40 + newline + 40
+    assert result.items[0].truncated is True
+
+
+@pytest.mark.asyncio
+async def test_yt_transcript_fetcher_no_cap_returns_full():
+    transcript = _FakeTranscript([_Segment("a" * 40, 0.0, 1.0)])
+    fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=transcript))
+    result = await fetcher.transcript(
+        YTTranscriptRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ"), max_chars=0
+    )
+    response = result.meta["response"]
+    assert response["truncated"] is False and len(response["text"]) == 40
+
+
+@pytest.mark.asyncio
 async def test_yt_transcript_fetcher_invalid_url():
     fetcher = YTTranscriptFetcher(_FakeTranscriptClient())
     result = await fetcher.transcript(YTTranscriptRequest(url="not-a-url"))

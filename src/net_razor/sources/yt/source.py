@@ -19,6 +19,7 @@ from net_razor.models import (
 from net_razor.sources.yt.enrich import (
     TRANSCRIPT_ERROR_TYPES,
     candidate_to_item,
+    cap_text,
     fetch_transcripts,
 )
 from net_razor.sources.yt.search_client import YouTubeSearchClient, YouTubeSearchError
@@ -36,10 +37,12 @@ class YTSource:
         *,
         search_client: YouTubeSearchClient | None,
         transcript_client: TranscriptClient,
+        max_transcript_chars: int = 0,
         logger: logging.Logger | None = None,
     ) -> None:
         self._search_client = search_client
         self._transcript_client = transcript_client
+        self._max_transcript_chars = max_transcript_chars
         self._log = logger or logging.getLogger("net_razor.sources.yt")
 
     async def fetch(self, request: YTRequest, window: ResolvedWindow) -> FetchResult:
@@ -94,7 +97,14 @@ class YTSource:
             transcript = transcripts.get(index)
             transcript_text = transcript[0] if transcript else None
             transcript_meta = transcript[1] if transcript else None
-            items.append(candidate_to_item(candidate, request.query, transcript_text))
+            truncated = False
+            if transcript_text:
+                transcript_text, truncated = cap_text(
+                    transcript_text, self._max_transcript_chars
+                )
+            items.append(
+                candidate_to_item(candidate, request.query, transcript_text, truncated=truncated)
+            )
             raw[candidate.video_id] = {**candidate.raw, "transcript": transcript_meta}
 
         return FetchResult(
@@ -118,11 +128,12 @@ class YTTranscriptFetcher:
         self._client = transcript_client
         self._log = logger or logging.getLogger("net_razor.sources.yt.transcript")
 
-    async def transcript(self, request: YTTranscriptRequest) -> FetchResult:
+    async def transcript(self, request: YTTranscriptRequest, *, max_chars: int = 0) -> FetchResult:
         effective = {
             "url": request.url,
             "languages": request.languages,
             "include_segments": request.include_segments,
+            "max_chars": max_chars,
         }
         try:
             video_id = extract_video_id(request.url)
@@ -144,7 +155,13 @@ class YTTranscriptFetcher:
             )
 
         segments = segments_from_result(result)
-        text = "\n".join(segment.text for segment in segments)
+        full_text = "\n".join(segment.text for segment in segments)
+        text, truncated = cap_text(full_text, max_chars)
+        # Keep the returned segments consistent with the capped text so the whole
+        # response stays bounded (segments are opt-in, and only trimmed when truncated).
+        out_segments = segments
+        if truncated:
+            out_segments = _capped_segments(segments, max_chars)
         canonical_url = f"https://www.youtube.com/watch?v={video_id}"
         response = {
             "source": "yt",
@@ -157,8 +174,10 @@ class YTTranscriptFetcher:
             "is_generated": result.is_generated,
             "segment_count": len(segments),
             "text": text,
+            "truncated": truncated,
+            "full_char_count": len(full_text),
             "segments": (
-                [segment.model_dump(mode="json") for segment in segments]
+                [segment.model_dump(mode="json") for segment in out_segments]
                 if request.include_segments
                 else []
             ),
@@ -177,6 +196,7 @@ class YTTranscriptFetcher:
             # sentinel rather than the wall clock to keep the item deterministic.
             published_at=_NO_PUBLISH_DATE,
             query_used=request.url,
+            truncated=truncated,
         )
         return FetchResult(
             items=[item] if text else [],
@@ -207,6 +227,8 @@ def _transcript_error(
         "is_generated": None,
         "segment_count": 0,
         "text": None,
+        "truncated": False,
+        "full_char_count": 0,
         "segments": [],
         "errors": [error.model_dump(mode="json")],
     }
@@ -214,5 +236,19 @@ def _transcript_error(
         items=[], raw={}, errors=[error], effective_request=effective,
         meta={"response": response},
     )
+
+
+def _capped_segments(segments: list[Any], max_chars: int) -> list[Any]:
+    """The leading segments whose cumulative text fits within ``max_chars``."""
+    if max_chars <= 0:
+        return segments
+    kept: list[Any] = []
+    total = 0
+    for segment in segments:
+        total += len(segment.text) + 1  # +1 for the joining newline
+        if total > max_chars:
+            break
+        kept.append(segment)
+    return kept
 
 

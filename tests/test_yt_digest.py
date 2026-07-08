@@ -138,6 +138,39 @@ async def test_digest_require_transcript_skips_captionless():
 
 
 @pytest.mark.asyncio
+async def test_digest_caps_transcript_and_flags_truncation():
+    class _LongTranscript:
+        language = "English"
+        language_code = "en"
+        is_generated = False
+
+        def __iter__(self):
+            # one ~5000-char segment
+            return iter([_Segment("x" * 5000, 0.0, 1.0)])
+
+    class _LongClient:
+        def fetch(self, video_id, languages):
+            return _LongTranscript()
+
+    discovery = _FakeDiscovery([_candidate("vidlongtext")])
+    digest = YTChannelDigest(discovery=discovery, transcript_client=_LongClient())
+    leg = _leg("UCxxxxxxxxxxxxxxxxxxxxxx", max_transcript_chars=1000)
+
+    result = await digest.fetch(leg, WINDOW)
+    item = result.items[0]
+    assert len(item.text) == 1000 and item.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_digest_no_cap_keeps_full_text():
+    discovery = _FakeDiscovery([_candidate("vidshorttxt")])
+    digest = YTChannelDigest(discovery=discovery, transcript_client=_FakeTranscriptClient())
+    leg = _leg("UCxxxxxxxxxxxxxxxxxxxxxx", max_transcript_chars=0)  # 0 = no cap
+    result = await digest.fetch(leg, WINDOW)
+    assert result.items[0].truncated is False and result.items[0].text == "hello"
+
+
+@pytest.mark.asyncio
 async def test_digest_fetch_maps_403_to_blocked():
     request = httpx.Request("GET", "https://www.youtube.com/feeds/videos.xml")
     blocked = httpx.HTTPStatusError(

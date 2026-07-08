@@ -91,8 +91,19 @@ def _candidate_error(
     )
 
 
+def cap_text(text: str, max_chars: int) -> tuple[str, bool]:
+    """Trim text to ``max_chars`` (0 = no cap). Returns (text, was_truncated)."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text, False
+    return text[:max_chars], True
+
+
 def candidate_to_item(
-    candidate: YouTubeVideoCandidate, query_used: str, transcript_text: str | None
+    candidate: YouTubeVideoCandidate,
+    query_used: str,
+    transcript_text: str | None,
+    *,
+    truncated: bool = False,
 ) -> EvidenceItem:
     text = transcript_text or candidate.description or candidate.title
     return EvidenceItem(
@@ -111,4 +122,5 @@ def candidate_to_item(
             views=candidate.view_count,
         ),
         query_used=query_used,
+        truncated=truncated,
     )

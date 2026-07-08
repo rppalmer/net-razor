@@ -110,6 +110,7 @@ All of its parameters are optional:
 | `channels` | Channels to use for this one call instead of `YOUTUBE_CHANNEL_IDS` (same forms as above) | the configured channels |
 | `only_new` | Skip videos already returned by a prior digest run (dedup across runs) | `YT_DIGEST_ONLY_NEW` (`false`) |
 | `require_transcript` | Skip videos with no fetchable transcript (e.g. captions disabled) instead of falling back to the description | `YT_DIGEST_REQUIRE_TRANSCRIPT` (`false`) |
+| `max_transcript_chars` | Cap each transcript's characters (`0` = no cap); truncated items set `truncated: true` | `YT_MAX_TRANSCRIPT_CHARS` (`40000`) |
 
 Per-channel `videos`/`days` overrides in `YOUTUBE_CHANNEL_IDS` take precedence over the
 `videos_per_channel`/`days` parameters for the channels that set them.
@@ -125,6 +126,13 @@ one:
 ```bash
 .venv/bin/net-razor yt-channel-digest --only-new --days 7
 ```
+
+**Transcript length.** Transcripts are capped to `max_transcript_chars` (default `40000` ≈ ~10k
+tokens ≈ a ~35-minute video at normal speaking pace) so a single long livestream can't blow the
+LLM's context — this is a deterministic bound, independent of how the agent or host manages
+context. Capped items set `truncated: true`; the full transcript is always one re-fetch away via
+`net_razor_yt_transcript` (which returns `truncated` and `full_char_count`, and accepts
+`max_chars=0` for the complete text).
 
 **Transcript availability.** Each item's `item_type` says what its `text` is: `transcript` means
 `text` is the real transcript; `video` means no transcript was available (captions disabled, or
