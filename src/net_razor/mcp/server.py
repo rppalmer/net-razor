@@ -10,6 +10,7 @@ from net_razor.models import (
     ResearchRequest,
     XRequest,
     YTChannelDigestRequest,
+    YTNewVideosRequest,
     YTRequest,
     YTTranscriptRequest,
 )
@@ -98,6 +99,27 @@ def create_server(app: App | None = None) -> FastMCP:
                 days=days,
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
+            )
+        )
+
+    @mcp.tool()
+    async def net_razor_yt_new_videos(
+        days: int = 7,
+        videos_per_channel: int = 10,
+        channels: list[str] | None = None,
+        include_processed: bool = False,
+    ) -> dict[str, Any]:
+        """List recent videos across the configured (or supplied) YouTube channels as a
+        compact queue — channel, title, url, id, published_at — with NO transcripts. By
+        default only videos not yet transcribed are returned. Process them one at a time
+        with net_razor_yt_transcript so only one transcript is ever in context (audited)."""
+
+        return await net_razor_app.yt_new_videos(
+            YTNewVideosRequest(
+                days=days,
+                videos_per_channel=videos_per_channel,
+                channels=channels or [],
+                include_processed=include_processed,
             )
         )
 

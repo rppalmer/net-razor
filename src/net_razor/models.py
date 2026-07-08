@@ -221,6 +221,35 @@ class YTChannelDigestRequest(BaseModel):
         return self
 
 
+class YTNewVideosRequest(BaseModel):
+    """Lightweight discovery: recent videos across channels, no transcripts.
+
+    The work queue for the incremental flow — list new videos, then process one at
+    a time via ``yt_transcript`` so only one transcript is ever in context."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    channels: list[str] = Field(default_factory=list)
+    days: int = Field(default=7, ge=1, le=3650)
+    since: date | None = None
+    until: date | None = None
+    videos_per_channel: int = Field(default=10, ge=1, le=25)
+    # By default only videos not yet transcribed are returned (a durable queue);
+    # set True to include ones already processed.
+    include_processed: bool = False
+
+    @field_validator("channels")
+    @classmethod
+    def _clean_channels(cls, value: list[str]) -> list[str]:
+        return [entry.strip() for entry in value if entry.strip()]
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> YTNewVideosRequest:
+        if self.since and self.until and self.until <= self.since:
+            raise ValueError("until must be after since")
+        return self
+
+
 class YTChannelLeg(BaseModel):
     """One channel's slice of a digest — the audited request for a single leg."""
 

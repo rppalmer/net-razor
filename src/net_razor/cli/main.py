@@ -11,6 +11,7 @@ from net_razor.models import (
     ResearchRequest,
     XRequest,
     YTChannelDigestRequest,
+    YTNewVideosRequest,
     YTRequest,
     YTTranscriptRequest,
 )
@@ -70,6 +71,20 @@ def parse_args() -> argparse.Namespace:
     yt_search.add_argument("--transcript-limit", type=int, default=3)
     yt_search.add_argument(
         "--fetch-transcripts", action=argparse.BooleanOptionalAction, default=True
+    )
+
+    yt_new = subparsers.add_parser(
+        "yt-new-videos", help="List recent videos across channels (queue, no transcripts)."
+    )
+    yt_new.add_argument("--days", type=int, default=7)
+    yt_new.add_argument("--videos-per-channel", type=int, default=10)
+    yt_new.add_argument(
+        "--channels", default="",
+        help="Override configured channels (comma-separated IDs, @handles, or URLs).",
+    )
+    yt_new.add_argument(
+        "--include-processed", action="store_true",
+        help="Include videos already transcribed (default: only not-yet-processed).",
     )
 
     yt_digest = subparsers.add_parser(
@@ -176,6 +191,19 @@ async def run_command(args: argparse.Namespace) -> int:
                     days=args.days,
                     transcript_limit=args.transcript_limit,
                     fetch_transcripts=args.fetch_transcripts,
+                )
+            )
+        )
+        return 0
+
+    if args.command == "yt-new-videos":
+        _print_json(
+            await app.yt_new_videos(
+                YTNewVideosRequest(
+                    days=args.days,
+                    videos_per_channel=args.videos_per_channel,
+                    channels=_csv_values(args.channels),
+                    include_processed=args.include_processed,
                 )
             )
         )

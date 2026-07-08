@@ -46,7 +46,8 @@ def make_app(store, clock):
     """Factory building an App wired with fake sources."""
 
     def _make(
-        *, x=None, hn=None, yt=None, yt_transcript=None, yt_digest=None, settings=None
+        *, x=None, hn=None, yt=None, yt_transcript=None, yt_digest=None, yt_discovery=None,
+        settings=None,
     ) -> App:
         return App(
             settings=settings or _StubSettings(),
@@ -58,6 +59,7 @@ def make_app(store, clock):
             yt_source=yt or RecordingSource("yt", FetchResult.empty({})),
             yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
             yt_channel_digest_source=yt_digest or _StubDigest(),
+            yt_discovery=yt_discovery or _StubDiscovery(),
         )
 
     return _make
@@ -79,6 +81,14 @@ class _StubDigest:
 
     async def fetch(self, leg, window):
         return FetchResult.empty({})
+
+
+class _StubDiscovery:
+    async def resolve_channels(self, refs):
+        return [], [ref.raw for ref in refs]
+
+    async def recent_videos(self, channel_id, window, max_results):
+        return []
 
 
 class _StubSettings:

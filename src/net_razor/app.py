@@ -5,6 +5,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import Clock, ResolvedWindow, SystemClock, resolve_window
@@ -19,6 +21,7 @@ from net_razor.models import (
     XRequest,
     YTChannelDigestRequest,
     YTChannelLeg,
+    YTNewVideosRequest,
     YTRequest,
     YTTranscriptRequest,
 )
@@ -27,7 +30,7 @@ from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
 from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel, parse_channel_refs
-from net_razor.sources.yt.rss_client import YouTubeRssClient
+from net_razor.sources.yt.rss_client import YouTubeRssClient, YouTubeRssError
 from net_razor.sources.yt.search_client import HttpYouTubeSearchClient
 from net_razor.sources.yt.transcript_client import YouTubeTranscriptClient
 
@@ -48,6 +51,7 @@ class App:
     yt_source: YTSource
     yt_transcript_fetcher: YTTranscriptFetcher
     yt_channel_digest_source: YTChannelDigest
+    yt_discovery: YouTubeRssClient
 
     # -- per-source search tools --------------------------------------------
     async def x_search(self, request: XRequest) -> dict[str, Any]:
@@ -145,6 +149,82 @@ class App:
                 "call_id": call.id,
                 "window": window.as_dict(),
                 "channels": channels_summary,
+                "unresolved": unresolved,
+                "caveats": caveats,
+            }
+            call.set_response(response)
+            return response
+
+    # -- lightweight discovery (the incremental work queue) ------------------
+    async def yt_new_videos(self, request: YTNewVideosRequest) -> dict[str, Any]:
+        async with self.recorder.call(
+            tool="yt_new_videos", source="yt", request=request.model_dump(mode="json")
+        ) as call:
+            window = resolve_window(
+                days=request.days, since=request.since, until=request.until, now=self.clock.now()
+            )
+            refs = (
+                parse_channel_refs("\n".join(request.channels))
+                if request.channels
+                else self.settings.youtube_channel_refs
+            )
+            effective = {"window": window.as_dict(), "include_processed": request.include_processed}
+            if not refs:
+                error = ServiceErrorItem(
+                    type="no_channels_configured",
+                    message="No YouTube channels configured. Set YOUTUBE_CHANNEL_IDS or "
+                            "pass channels.",
+                )
+                call.record(effective_request=effective, items=[], raw={}, errors=[error])
+                call.outcome = "completed_with_errors"
+                response = {"call_id": call.id, "window": window.as_dict(), "videos": [],
+                            "count": 0, "unresolved": [], "caveats": [error.message]}
+                call.set_response(response)
+                return response
+
+            resolved, unresolved = await self.yt_discovery.resolve_channels(refs)
+            # A video leaves the queue once it has been transcribed (via yt_transcript).
+            seen = (
+                set()
+                if request.include_processed
+                else self.store.seen_source_ids(tool="yt_transcript", source="yt")
+            )
+
+            videos: list[dict[str, Any]] = []
+            caveats: list[str] = []
+            for channel in resolved:
+                try:
+                    candidates = await self.yt_discovery.recent_videos(
+                        channel.channel_id, window, request.videos_per_channel
+                    )
+                except (YouTubeRssError, httpx.HTTPError):
+                    caveats.append(f"Could not list videos for channel {channel.channel_id}.")
+                    continue
+                for candidate in candidates:
+                    if candidate.video_id in seen:
+                        continue
+                    videos.append({
+                        "channel_id": candidate.channel_id or channel.channel_id,
+                        "channel_title": candidate.channel_title,
+                        "video_id": candidate.video_id,
+                        "url": candidate.canonical_url,
+                        "title": candidate.title,
+                        "published_at": candidate.published_at.isoformat(),
+                    })
+
+            videos.sort(key=lambda v: v["published_at"], reverse=True)
+            for raw_ref in unresolved:
+                caveats.append(f"Could not resolve channel reference: {raw_ref}")
+            if unresolved or caveats:
+                call.outcome = "completed_with_errors"
+
+            call.record(effective_request=effective, items=[], raw={}, errors=[])
+            self.store.set_item_count(call.id, len(videos))
+            response = {
+                "call_id": call.id,
+                "window": window.as_dict(),
+                "videos": videos,
+                "count": len(videos),
                 "unresolved": unresolved,
                 "caveats": caveats,
             }
@@ -438,13 +518,13 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         max_transcript_chars=resolved.yt_max_transcript_chars,
     )
     yt_transcript_fetcher = YTTranscriptFetcher(transcript_client)
-    # The channel digest is key-free: RSS discovery + proxied transcripts, no API key.
+    # The channel digest and discovery are key-free: RSS + proxied transcripts, no API key.
+    rss_discovery = YouTubeRssClient(
+        proxy_url=resolved.proxy_url_value,
+        timeout_seconds=resolved.request_timeout_seconds,
+    )
     yt_channel_digest_source = YTChannelDigest(
-        discovery=YouTubeRssClient(
-            proxy_url=resolved.proxy_url_value,
-            timeout_seconds=resolved.request_timeout_seconds,
-        ),
-        transcript_client=transcript_client,
+        discovery=rss_discovery, transcript_client=transcript_client
     )
 
     return App(
@@ -457,4 +537,5 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         yt_source=yt_source,
         yt_transcript_fetcher=yt_transcript_fetcher,
         yt_channel_digest_source=yt_channel_digest_source,
+        yt_discovery=rss_discovery,
     )

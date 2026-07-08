@@ -85,6 +85,23 @@ YOUTUBE_CHANNEL_IDS=@Fireship | videos=10 days=14, UCsBjURrPoezykLs9EqgamOA
 
 These overrides apply to the channel digest below; `YT_SEARCH_MODE=channels` search ignores them.
 
+### Incremental workflow (many channels, small context)
+
+`net_razor_yt_channel_digest` fetches every channel's transcripts in one response — fine when
+context is plentiful, but it grows with channel count. For a small-context/local LLM, prefer the
+**incremental** flow, which keeps peak context flat regardless of how many channels you track:
+
+1. `net_razor_yt_new_videos` (CLI: `net-razor yt-new-videos`) returns a compact **queue** —
+   channel, title, url, id, published_at for recent videos, **no transcripts**. By default it
+   excludes videos already transcribed (via `yt_transcript`), so it's a durable work list; pass
+   `include_processed` to see the full window. A five-video queue is ~1.5 KB.
+2. For each queued video, call `net_razor_yt_transcript` (capped at `YT_MAX_TRANSCRIPT_CHARS`),
+   summarize it, and move on. Only **one** transcript is ever in context at a time.
+
+A video leaves the queue once its transcript is fetched, so a run that stops partway resumes
+cleanly next time. Caption-less videos recur only until they age out of the channel's recent
+feed (~15 uploads).
+
 ### Channel digest
 
 The `net_razor_yt_channel_digest` tool (CLI: `net-razor yt-channel-digest`) walks each
@@ -176,6 +193,7 @@ Available MCP tools:
 - `net_razor_x_search`
 - `net_razor_hn_search`
 - `net_razor_yt_search`
+- `net_razor_yt_new_videos`
 - `net_razor_yt_channel_digest`
 - `net_razor_yt_transcript`
 
@@ -202,6 +220,7 @@ The CLI is useful for manual testing and one-off local runs. All commands print 
 .venv/bin/net-razor x-search "Python agents lang:en" --max-results 5
 .venv/bin/net-razor hn-search "Python agents" --max-results 5
 .venv/bin/net-razor yt-search "Python agents" --max-results 5 --transcript-limit 2
+.venv/bin/net-razor yt-new-videos --days 7 --videos-per-channel 10
 .venv/bin/net-razor yt-channel-digest --days 7 --videos-per-channel 5 --channels "@Fireship,UCabc...xyz"
 .venv/bin/net-razor yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --no-include-segments
 .venv/bin/net-razor doctor
