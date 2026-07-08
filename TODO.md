@@ -2,6 +2,39 @@
 
 Roadmap and parked ideas. Nothing here is committed to a release.
 
+## YouTube: incremental digest + cross-video synthesis (map-reduce)
+
+Problem: `yt_channel_digest` is monolithic — one call returns every channel's
+videos *and* transcripts, so the agent must ingest all of it at once. That
+scales the wrong way for a small-context local LLM (worse with more channels).
+
+Better shape — separate discovery from content and process incrementally:
+
+- A lean `yt_new_videos` discovery tool: recent videos across configured
+  channels, deduped against already-transcribed videos (audit store), returning
+  compact metadata only (channel, title, url, id, date). This is the work queue.
+- A per-video loop: fetch one transcript (capped, see below), summarize, move on.
+  Peak context stays flat regardless of channel count.
+- Dedup keyed off *transcript fetched* (not "listed"), so a run that dies halfway
+  loses nothing; caption-less videos get marked attempted so they don't recur.
+
+Cross-video synthesis (weighting, competing ideas, themes) via map-reduce, so it
+survives on limited hardware:
+
+- Map (one at a time, bounded): per video, distill a compact structured note —
+  key claims, stance, topics, a quote or two. Keep the note, drop the raw text.
+- Reduce (all together, still small): load the ~200-400 token notes and do the
+  real analysis. 10 notes ≈ ~3k tokens — fits a small context. Sharper than
+  reasoning over 200k tokens of raw captions (avoids "lost in the middle").
+- Lives in the skill/agent, not in net_razor (which stays a deterministic fetch
+  layer, no editorial step). Two-pass (map loop, then a fresh synthesis pass fed
+  only the notes) sidesteps a host that won't evict raw tool results.
+
+Related knobs already relevant: `max_transcript_chars` (deterministic per-video
+bound; the one context guard that does not rely on agent discipline). Optional
+bounded "batch fetch" (transcripts for N specific video IDs, capped) as an escape
+hatch when simultaneity is deliberately wanted and context allows.
+
 ## Reddit: read-only source (unauthenticated-first, OAuth upgrade path)
 
 Goal: pull recent Reddit discussion for a topic as another evidence source,
