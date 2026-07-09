@@ -130,7 +130,8 @@ class App:
                 *(
                     self._search_tool(
                         "yt_channel_digest", self.yt_channel_digest_source, leg,
-                        parent_id=call.id, window=self._digest_leg_window(channel, window),
+                        parent_id=call.id,
+                        window=self._channel_window(channel.source_ref, window),
                     )
                     for leg, channel in zip(legs, resolved, strict=True)
                 ),
@@ -193,9 +194,13 @@ class App:
             videos: list[dict[str, Any]] = []
             caveats: list[str] = []
             for channel in resolved:
+                ref = channel.source_ref
+                # Same per-channel `| videos= days=` overrides as the digest.
+                count = self._channel_video_count(ref, request.videos_per_channel)
+                channel_window = self._channel_window(ref, window)
                 try:
                     candidates = await self.yt_discovery.recent_videos(
-                        channel.channel_id, window, request.videos_per_channel
+                        channel.channel_id, channel_window, count
                     )
                 except (YouTubeRssError, httpx.HTTPError):
                     caveats.append(f"Could not list videos for channel {channel.channel_id}.")
@@ -388,11 +393,10 @@ class App:
         max_transcript_chars: int,
     ) -> YTChannelLeg:
         ref = channel.source_ref
-        videos = min(ref.videos_per_channel or request.videos_per_channel, 25)
         return YTChannelLeg(
             channel_id=channel.channel_id,
             channel_title=channel.title or "",
-            videos_per_channel=max(1, videos),
+            videos_per_channel=self._channel_video_count(ref, request.videos_per_channel),
             fetch_transcripts=request.fetch_transcripts,
             transcript_limit=request.transcript_limit_per_channel,
             languages=request.languages,
@@ -403,13 +407,15 @@ class App:
             exclude_video_ids=list(seen),
         )
 
-    def _digest_leg_window(
-        self, channel: ResolvedChannel, base_window: ResolvedWindow
-    ) -> ResolvedWindow:
-        days = channel.source_ref.days
-        if days is None:
+    # Per-channel `| videos= days=` overrides, applied the same way wherever videos
+    # are collected from a channel (the digest and yt_new_videos).
+    def _channel_video_count(self, ref: ChannelRef, fallback: int) -> int:
+        return max(1, min(ref.videos_per_channel or fallback, 25))
+
+    def _channel_window(self, ref: ChannelRef, base_window: ResolvedWindow) -> ResolvedWindow:
+        if ref.days is None:
             return base_window
-        return resolve_window(days=max(1, days), since=None, until=None, now=self.clock.now())
+        return resolve_window(days=max(1, ref.days), since=None, until=None, now=self.clock.now())
 
     def _digest_group(
         self, legs: list[YTChannelLeg], results: list[Any]

@@ -21,6 +21,7 @@ def _candidate(video_id: str, day: int) -> YouTubeVideoCandidate:
 class _FakeDiscovery:
     def __init__(self, by_channel):
         self._by_channel = by_channel
+        self.calls: list[tuple[str, int]] = []
 
     async def resolve_channels(self, refs):
         resolved = [
@@ -29,6 +30,7 @@ class _FakeDiscovery:
         return resolved, []
 
     async def recent_videos(self, channel_id, window, max_results):
+        self.calls.append((channel_id, max_results))
         return self._by_channel.get(channel_id, [])[:max_results]
 
 
@@ -72,6 +74,15 @@ async def test_new_videos_include_processed_returns_all(make_app, store, clock):
         YTNewVideosRequest(channels=["@chan"], include_processed=True)
     )
     assert response["count"] == 2  # nothing excluded
+
+
+@pytest.mark.asyncio
+async def test_new_videos_honors_per_channel_videos_override(make_app):
+    discovery = _FakeDiscovery({"UC1": [_candidate(f"vid{i:08d}", 5) for i in range(5)]})
+    app = make_app(yt_discovery=discovery)
+    # `| videos=1` must cap this channel at 1, same as the digest — not the tool default.
+    await app.yt_new_videos(YTNewVideosRequest(channels=["@chan | videos=1"]))
+    assert discovery.calls == [("UC1", 1)]
 
 
 @pytest.mark.asyncio
