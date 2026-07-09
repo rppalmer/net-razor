@@ -30,60 +30,129 @@ python -m pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-All configuration lives in a single root `.env`. X search needs session cookies:
+Then edit `.env` — see [Configuration](#configuration). Every setting lives in this one file,
+loaded once at startup, so **restart the server after any change.**
+
+## Configuration
+
+### A working `.env`
+
+A typical setup is X cookies (only if you want X search), a list of YouTube channels to follow,
+and a couple of defaults for a scheduled run:
 
 ```dotenv
-AUTH_TOKEN=
-CT0=
+# X search — cookies from a logged-in x.com session (omit these if you don't use X)
+AUTH_TOKEN=your_x_auth_token_cookie
+CT0=your_x_ct0_cookie
+
+# YouTube channels to follow — used by the digest and new-videos tools (no API key needed).
+# A MULTI-LINE value MUST be wrapped in double quotes, or only the first line is read.
+YOUTUBE_CHANNEL_IDS="
+@channel1 | videos=1
+@channel2 | videos=2 days=14
+"
+
+# Sensible defaults for a scheduled daily digest / queue
+YT_DIGEST_ONLY_NEW=true            # don't re-process videos seen in a prior run
+YT_DIGEST_REQUIRE_TRANSCRIPT=true  # skip videos with no captions (e.g. livestreams)
+
+# Write logs to a file (MCP hosts usually discard the server's stderr)
+LOG_FILE=logs/net-razor.log
+
+# Only needed if you use yt_search (keyword search across all of YouTube)
+# YOUTUBE_API_KEY=your_youtube_data_api_key
 ```
 
-```dotenv
-YOUTUBE_API_KEY=
-YT_SEARCH_MODE=broad
-YOUTUBE_CHANNEL_IDS=
-# YT_PROXY_URL=
-```
+### Every setting
 
-What needs what:
+All variables are optional unless marked **required**. Relative paths resolve to the repo root.
 
-- **`net_razor_yt_search`** (query search) needs a **YouTube Data API key** (`YOUTUBE_API_KEY`).
-- **`net_razor_yt_channel_digest`** and **`net_razor_yt_transcript`** need **no API key** — they
-  use YouTube's public RSS feeds and transcript endpoints. Set `YT_PROXY_URL` to route those
-  unauthenticated requests through a (residential) proxy; see [Safety notes](#safety-notes).
+**Core & logging**
 
-`YT_SEARCH_MODE` controls the query-search tool: `broad` (the default) searches all of YouTube;
-`channels` restricts it to the channels in `YOUTUBE_CHANNEL_IDS`.
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DATABASE_PATH` | SQLite audit-store location | `data/net_razor_audit.db` |
+| `LOG_LEVEL` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, …) | `INFO` |
+| `LOG_FILE` | Also write JSON logs to this file. Set it — MCP hosts usually discard the server's stderr | *unset (stderr only)* |
+| `REQUEST_TIMEOUT_SECONDS` | HTTP timeout for HN and YouTube requests | `30` |
 
-### Configuring channels
+**X** — required for X search; leave unset if you don't use X.
 
-`YOUTUBE_CHANNEL_IDS` is a comma- or newline-separated list. Each entry identifies one channel
-and may be written in any of these forms:
+| Variable | Description | Default |
+| --- | --- | --- |
+| `AUTH_TOKEN` | **Required.** `auth_token` cookie from a logged-in x.com session | *unset* |
+| `CT0` | **Required.** `ct0` cookie from the same session | *unset* |
+| `NODE_BINARY` | Path to Node (X search runs a bundled Node backend). Use an **absolute** path if your MCP host launches with a sparse `PATH` | `node` |
+
+**YouTube**
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `YOUTUBE_CHANNEL_IDS` | Channels for the digest & new-videos tools (see [Channel list](#channel-list)) | *unset* |
+| `YT_PROXY_URL` | Route the unauthenticated RSS + transcript fetches through a proxy. Use a **residential** proxy to avoid YouTube IP blocks | *unset* |
+| `YT_DIGEST_ONLY_NEW` | Default for skipping videos already processed in a prior run (dedup across runs) | `false` |
+| `YT_DIGEST_REQUIRE_TRANSCRIPT` | Default for skipping videos with no transcript (e.g. captions disabled) instead of returning the description | `false` |
+| `YT_MAX_TRANSCRIPT_CHARS` | Cap on transcript characters per video (`0` = no cap). ~`40000` ≈ a 35-minute video; bounds LLM context | `40000` |
+| `YOUTUBE_API_KEY` | YouTube Data API key. **Only** for `yt_search`; the digest / new-videos / transcript tools need no key | *unset* |
+| `YT_SEARCH_MODE` | For `yt_search` only: `broad` (all of YouTube) or `channels` (restrict to `YOUTUBE_CHANNEL_IDS`) | `broad` |
+
+**Advanced** — rarely changed.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `HN_ALGOLIA_BASE_URL` | Hacker News (Algolia) API base URL | `https://hn.algolia.com/api/v1` |
+| `YOUTUBE_API_BASE_URL` | YouTube Data API base URL | `https://www.googleapis.com` |
+| `X_SEARCH_SUBPROCESS_TIMEOUT_SECONDS` | Max runtime for the X Node backend | `45` |
+| `X_SEARCH_UPSTREAM_TIMEOUT_SECONDS` | X upstream request timeout | `20` |
+| `X_SEARCH_MAX_ATTEMPTS` | Retry attempts for a failed X search (1–5) | `3` |
+| `X_SEARCH_RETRY_BACKOFF_SECONDS` | Backoff between X retries, in seconds | `1` |
+| `X_SEARCH_DELAY_SECONDS` | Delay before each X request, in seconds | `1` |
+
+Accepted aliases: `YT_API_KEY` → `YOUTUBE_API_KEY`, `YT_CHANNEL_IDS` → `YOUTUBE_CHANNEL_IDS`,
+`YT_TRANSCRIPT_PROXY_URL` → `YT_PROXY_URL`, `HN_API_BASE_URL` → `HN_ALGOLIA_BASE_URL`.
+
+### Channel list
+
+`YOUTUBE_CHANNEL_IDS` is a comma- or newline-separated list (wrap a multi-line value in double
+quotes). Each entry identifies one channel in any of these forms:
 
 | Form | Example |
 | --- | --- |
-| Channel ID — a `UC` + 22-character identifier | `UCsBjURrPoezykLs9EqgamOA` |
-| `@handle` | `@Fireship` |
-| Channel URL (`/channel/UC…`, `/@handle`, `/user/name`, `/c/name`) | `https://youtube.com/@Fireship` |
+| Channel ID (`UC` + 22 chars) | `UCxxxxxxxxxxxxxxxxxxxxxx` |
+| `@handle` | `@channel1` |
+| Channel URL (`/channel/UC…`, `/@handle`, `/user/name`, `/c/name`) | `https://youtube.com/@channel1` |
 
-A channel ID is the stable `UC…` string YouTube assigns each channel; you can read it from a
-channel page URL under `/channel/`. Handles and non-ID URLs are resolved to their channel ID by
-reading the public channel page (no API key) on first use, then cached — so any form works. A
-bare `UC…` ID or a `/channel/UC…` URL skips even that lookup.
+Handles and non-ID URLs are resolved to their channel ID by reading the public channel page (no
+API key) on first use, then cached — so any form works. A bare `UC…` ID or `/channel/UC…` URL
+skips even that lookup.
 
-Each entry may append per-channel overrides after a `|`. In the example below, `@Fireship` is
-capped at 10 videos over the last 14 days, while the second channel (given by its channel ID)
-uses the defaults:
+### Per-channel overrides
+
+Append overrides to any entry after a `|`. They control how much is collected **from that
+channel**, and apply identically to the digest and `yt_new_videos`:
+
+| Override | Description | Falls back to |
+| --- | --- | --- |
+| `videos=N` | Max videos to collect from this channel | the call's `videos_per_channel` |
+| `days=N` | Lookback window for this channel, in days | the call's `days` |
 
 ```dotenv
-YOUTUBE_CHANNEL_IDS=@Fireship | videos=10 days=14, UCsBjURrPoezykLs9EqgamOA
+YOUTUBE_CHANNEL_IDS="
+@channel1 | videos=1
+@channel2 | videos=2 days=5
+UCxxxxxxxxxxxxxxxxxxxxxx
+"
 ```
 
-| Override | Meaning | Default |
-| --- | --- | --- |
-| `videos=N` | Maximum videos to pull from this channel | the `videos_per_channel` value (5) |
-| `days=N` | Lookback window for this channel, in days | the `days` value (7) |
+In that list: `@channel1` returns its newest video only; `@channel2` returns up to 2 videos
+from the last 5 days; the bare channel ID uses the tool defaults. (Don't put `#` comments inside
+the quoted value — within quotes they become part of the list and can drop an entry.)
 
-These overrides apply to the channel digest below; `YT_SEARCH_MODE=channels` search ignores them.
+**Precedence for video count / window:** per-channel `| override` → per-call parameter → tool
+default. So `@channel1 | videos=1` returns one video no matter what the caller requests. (The
+API-based `YT_SEARCH_MODE=channels` *query* search is a different tool and ignores these.)
+
+## YouTube tools
 
 ### Incremental workflow (many channels, small context)
 
@@ -94,7 +163,8 @@ context is plentiful, but it grows with channel count. For a small-context/local
 1. `net_razor_yt_new_videos` (CLI: `net-razor yt-new-videos`) returns a compact **queue** —
    channel, title, url, id, published_at for recent videos, **no transcripts**. By default it
    excludes videos already transcribed (via `yt_transcript`), so it's a durable work list; pass
-   `include_processed` to see the full window. A five-video queue is ~1.5 KB.
+   `include_processed` to see the full window. A five-video queue is ~1.5 KB. It honors the same
+   per-channel `| videos= days=` overrides as the digest.
 2. For each queued video, call `net_razor_yt_transcript` (capped at `YT_MAX_TRANSCRIPT_CHARS`),
    summarize it, and move on. Only **one** transcript is ever in context at a time.
 
@@ -116,7 +186,8 @@ is involved and nothing is tied to a Google account. Two consequences of the RSS
 channel's roughly-15 most recent uploads are visible (no deep history), and items carry view
 counts but not likes/comments. Both discovery and transcripts honor `YT_PROXY_URL`.
 
-All of its parameters are optional:
+Its parameters are set **per call** (by the agent, or on the `yt-channel-digest` CLI) — you don't
+put these in `.env`; their defaults come from the config variables shown below. All are optional:
 
 | Parameter | Meaning | Default |
 | --- | --- | --- |
@@ -129,8 +200,8 @@ All of its parameters are optional:
 | `require_transcript` | Skip videos with no fetchable transcript (e.g. captions disabled) instead of falling back to the description | `YT_DIGEST_REQUIRE_TRANSCRIPT` (`false`) |
 | `max_transcript_chars` | Cap each transcript's characters (`0` = no cap); truncated items set `truncated: true` | `YT_MAX_TRANSCRIPT_CHARS` (`40000`) |
 
-Per-channel `videos`/`days` overrides in `YOUTUBE_CHANNEL_IDS` take precedence over the
-`videos_per_channel`/`days` parameters for the channels that set them.
+(Per-channel `| videos= days=` overrides in `YOUTUBE_CHANNEL_IDS` still win over the
+`videos_per_channel` / `days` parameters — see [Per-channel overrides](#per-channel-overrides).)
 
 **Deduplicating across daily runs.** `only_new` drops any video already returned by an earlier
 digest — it reads the video IDs straight from the audit store, so no external state is needed.
@@ -221,7 +292,7 @@ The CLI is useful for manual testing and one-off local runs. All commands print 
 .venv/bin/net-razor hn-search "Python agents" --max-results 5
 .venv/bin/net-razor yt-search "Python agents" --max-results 5 --transcript-limit 2
 .venv/bin/net-razor yt-new-videos --days 7 --videos-per-channel 10
-.venv/bin/net-razor yt-channel-digest --days 7 --videos-per-channel 5 --channels "@Fireship,UCabc...xyz"
+.venv/bin/net-razor yt-channel-digest --days 7 --videos-per-channel 5 --channels "@channel1,UCxxxxxxxxxxxxxxxxxxxxxx"
 .venv/bin/net-razor yt-transcript "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --no-include-segments
 .venv/bin/net-razor doctor
 .venv/bin/net-razor runs --limit 20
