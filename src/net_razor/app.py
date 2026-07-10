@@ -35,6 +35,7 @@ from net_razor.sources.yt.search_client import HttpYouTubeSearchClient
 from net_razor.sources.yt.transcript_client import YouTubeTranscriptClient
 
 _SOURCE_LABELS = {"x": "X", "hn": "HN", "yt": "YT"}
+_log = logging.getLogger("net_razor.app")
 
 
 @dataclass
@@ -144,7 +145,7 @@ class App:
 
             if unresolved or any(entry["errors"] for entry in channels_summary):
                 call.outcome = "completed_with_errors"
-            self.store.set_item_count(call.id, total)
+            call.set_item_count(total)
 
             response = {
                 "call_id": call.id,
@@ -224,7 +225,11 @@ class App:
                 call.outcome = "completed_with_errors"
 
             call.record(effective_request=effective, items=[], raw={}, errors=[])
-            self.store.set_item_count(call.id, len(videos))
+            call.set_item_count(len(videos))
+            _log.info(
+                "new_videos channels=%s videos=%s unresolved=%s include_processed=%s",
+                len(resolved), len(videos), len(unresolved), request.include_processed,
+            )
             response = {
                 "call_id": call.id,
                 "window": window.as_dict(),
@@ -284,7 +289,7 @@ class App:
                 call.outcome = "completed_with_errors"
 
             total_items = sum(summary["items_found"] for summary in sources_summary.values())
-            self.store.set_item_count(call.id, total_items)
+            call.set_item_count(total_items)
 
             response = {
                 "call_id": call.id,

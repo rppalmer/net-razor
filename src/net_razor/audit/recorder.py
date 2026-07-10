@@ -26,6 +26,7 @@ class CallHandle:
     _clock: Clock
     outcome: str = "ok"
     response: dict[str, Any] | None = None
+    item_count: int = 0
     _source: str | None = None
     _recorded: bool = False
 
@@ -49,11 +50,17 @@ class CallHandle:
             created_at=self._clock.now().isoformat(),
         )
         self._recorded = True
+        self.item_count = len(items)
         if errors:
             self.outcome = "completed_with_errors"
 
     def set_response(self, response: dict[str, Any]) -> None:
         self.response = response
+
+    def set_item_count(self, count: int) -> None:
+        """Record the item count for a fan-out call that aggregates child items."""
+        self.item_count = count
+        self._store.set_item_count(self.id, count)
 
 
 class AuditRecorder:
@@ -116,10 +123,11 @@ class AuditRecorder:
             raise
         self._finish(handle, started)
         _log.info(
-            "call_finished call_id=%s outcome=%s item_count=%s",
+            "call_finished call_id=%s outcome=%s item_count=%s duration_ms=%s",
             call_id,
             handle.outcome,
-            0 if handle.response is None else len(handle.response.get("items", []) or []),
+            handle.item_count,
+            round((time.perf_counter() - started) * 1000, 2),
         )
 
     def _finish(self, handle: CallHandle, started: float) -> None:

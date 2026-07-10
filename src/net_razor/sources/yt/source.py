@@ -145,11 +145,15 @@ class YTTranscriptFetcher:
         try:
             result = await asyncio.to_thread(self._client.fetch, video_id, request.languages)
         except tuple(TRANSCRIPT_ERROR_TYPES) as exc:
+            error_type = TRANSCRIPT_ERROR_TYPES[type(exc)]
+            self._log.info("transcript_unavailable video_id=%s reason=%s", video_id, error_type)
             return _transcript_error(
-                effective, video_id, request.languages,
-                TRANSCRIPT_ERROR_TYPES[type(exc)], str(exc),
+                effective, video_id, request.languages, error_type, str(exc),
             )
         except Exception as exc:
+            self._log.warning(
+                "transcript_failed video_id=%s error=%s", video_id, type(exc).__name__
+            )
             return _transcript_error(
                 effective, video_id, request.languages, "request_failed", str(exc)
             )
@@ -197,6 +201,12 @@ class YTTranscriptFetcher:
             published_at=_NO_PUBLISH_DATE,
             query_used=request.url,
             truncated=truncated,
+        )
+        self._log.info(
+            "transcript_fetched video_id=%s chars=%s full_chars=%s truncated=%s "
+            "segments=%s language=%s generated=%s",
+            video_id, len(text), len(full_text), truncated, len(segments),
+            result.language_code, result.is_generated,
         )
         return FetchResult(
             items=[item] if text else [],

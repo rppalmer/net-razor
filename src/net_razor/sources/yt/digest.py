@@ -111,6 +111,11 @@ class YTChannelDigest:
             truncated = False
             if transcript_text:
                 transcript_text, truncated = cap_text(transcript_text, leg.max_transcript_chars)
+            self._log.info(
+                "digest_video channel_id=%s video_id=%s has_transcript=%s chars=%s truncated=%s",
+                leg.channel_id, candidate.video_id, transcript_text is not None,
+                len(transcript_text or ""), truncated,
+            )
             items.append(
                 candidate_to_item(candidate, leg.query_label, transcript_text, truncated=truncated)
             )
@@ -118,8 +123,9 @@ class YTChannelDigest:
         # Prefer the channel title from the feed over any placeholder on the leg.
         channel_title = leg.channel_title or (candidates[0].channel_title if candidates else "")
         self._log.info(
-            "channel_digest source=yt backend=rss channel_id=%s item_count=%s",
-            leg.channel_id, len(items),
+            "channel_digest source=yt backend=rss channel_id=%s videos=%s "
+            "skipped_seen=%s skipped_no_transcript=%s",
+            leg.channel_id, len(items), skipped_seen, skipped_no_transcript,
         )
         return FetchResult(
             items=items, raw=raw, errors=errors, effective_request=effective,
