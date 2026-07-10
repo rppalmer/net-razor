@@ -109,10 +109,16 @@ def create_server(app: App | None = None) -> FastMCP:
         channels: list[str] | None = None,
         include_processed: bool = False,
     ) -> dict[str, Any]:
-        """List recent videos across the configured (or supplied) YouTube channels as a
-        compact queue — channel, title, url, id, published_at — with NO transcripts. By
-        default only videos not yet transcribed are returned. Process them one at a time
-        with net_razor_yt_transcript so only one transcript is ever in context (audited)."""
+        """PREFERRED for "summarize / catch up on my YouTube channels". Returns a compact
+        queue of recent videos across the configured channels — channel, title, url, id,
+        published_at — with NO transcripts (a five-video queue is ~1.5 KB). Already deduped
+        against videos you have processed before.
+
+        Then process the queue ONE VIDEO AT A TIME: for each item, call
+        net_razor_yt_transcript with its url, summarize it, and move on — so only one
+        transcript is ever in context. Do NOT use net_razor_yt_channel_digest for this;
+        that returns every channel's transcripts in one response and will overflow the
+        host's output limit. Audited."""
 
         return await net_razor_app.yt_new_videos(
             YTNewVideosRequest(
@@ -134,12 +140,17 @@ def create_server(app: App | None = None) -> FastMCP:
         require_transcript: bool | None = None,
         max_transcript_chars: int | None = None,
     ) -> dict[str, Any]:
-        """Per-channel YouTube digest: for each configured (or supplied) channel,
-        pull its latest videos in the window and attach transcripts. Results are
-        grouped per channel, not merged into one list (audited). only_new skips videos
-        already returned by a prior digest (dedup across daily runs). require_transcript
-        skips videos with no fetchable transcript (e.g. captions disabled) instead of
-        returning the description. Both fall back to their config defaults when omitted."""
+        """Per-channel YouTube digest: fetch each channel's recent videos AND their
+        transcripts, all in ONE response, grouped per channel (audited).
+
+        WARNING: with more than one or two channels this response is large — each
+        transcript can be up to YT_MAX_TRANSCRIPT_CHARS (~40 KB) — and commonly EXCEEDS
+        the MCP host's tool-output limit, which silently truncates the result. For the
+        routine "summarize my channels" task, do NOT use this; use net_razor_yt_new_videos
+        to get a small queue, then net_razor_yt_transcript per video. Use this digest only
+        when you deliberately want everything in one call and the host's output budget is
+        large. only_new dedups across runs; require_transcript skips caption-less videos;
+        both fall back to their config defaults when omitted."""
 
         return await net_razor_app.yt_channel_digest(
             YTChannelDigestRequest(
