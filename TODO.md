@@ -438,7 +438,14 @@ now point `channels_file` at a nonexistent path, with a guard test asserting it.
 
 ## Roadmap — not scheduled
 
-### R1 · Whisper fallback for caption-less videos
+### R1 · Whisper fallback for caption-less videos — **deferred**
+
+Parked by decision: the cheaper fix is choosing channels whose videos
+reliably have captions. Revisit only if the miss rate climbs. The design
+notes below stand; the simplest viable version needs **no MCP server
+changes at all** -- a transcript written into the audit store by any means
+is already served by `yt_transcript`, paged and cached (verified against a
+scratch database).
 
 Worth doing. Not next, and **not as a normal tool call.**
 
@@ -479,35 +486,41 @@ area than reading published captions. Keep it in its own module behind a config
 flag defaulting to off, so when `yt-dlp` breaks — and it will, periodically —
 nothing else notices.
 
-### R2 · Reddit, read-only
+### R2 · Reddit — **blocked, not scheduled**
 
-Unauthenticated-first with an OAuth upgrade path. The clean path is the official
-OAuth Data API via a registered script app; in practice app creation is gated
-behind Reddit's Responsible Builder Policy and may be denied. When no key is
-available, fall back to unauthenticated fetch from the local/residential IP:
-discovery via `.rss`, thread bodies via the `.json` suffix on permalinks, a
-couple of requests per second, honest descriptive User-Agent, read-only.
+Two access paths were checked, and both are closed:
 
-**Do not use browser session-cookie replay.** It's a clearer ToS violation and
-risks the account, with no gain over the unauthenticated path for public subs.
-(This differs from X, where cookie auth is the only viable option — Reddit has a
-real free API, X does not.)
+- **robots.txt is `User-agent: * / Disallow: /`** — a blanket disallow for every
+  agent on every path, with a pointer to Reddit's Public Content Policy. There is
+  no RSS or feed carve-out. Verified 2026-08-10.
+- **Script-app registration** at `reddit.com/prefs/apps` dead-ends on the
+  Responsible Builder Policy screen for this account, so the free OAuth path that
+  would make everything above moot is not available either.
 
-Transport is pluggable so the auth mode is swappable without touching the source.
-Expect and handle 429 (back off) and 403 (surface as a handled error, don't
-retry-storm). Note the comment-tree truncation limit: deep threads need
-`/api/morechildren`, which is only practical with OAuth headroom.
+So there is no legitimate access route right now, and a source you cannot access
+legitimately is not a source. Do not route around it: cookie replay is a clearer
+violation than scraping and risks the account rather than the IP. (That trade was
+accepted deliberately for X, where no free API exists. Reddit has one — it is
+just closed to us.)
 
-Extract: subreddit, title, body, author, permalink, score, num_comments,
-created_at, and top-level comment text.
+**If threaded discussion is the goal, Lemmy is the legitimate substitute.** It is
+federated, Reddit-shaped, and its API is open and documented — `programming.dev`
+returned HTTP 200 unauthenticated on the first try. Smaller corpus, no policy
+problem. Revisit Reddit only if the app registration ever opens.
 
-### R3 · Polymarket, read-only trend signal
+### R3 · Polymarket — **dropped**
 
-Parked. Revisit only if Net-Razor needs a public "what changed recently?" signal
-for forecastable topics. Gamma public search, no auth, no wallet, no trading
-endpoints. Extract market title, question, top-outcome odds, price movement, end
-date, URL. Use volume/liquidity for context but keep dollar figures out of
-user-facing summaries; caveat thin, wide-spread, or weakly matched markets.
+Removed rather than parked, so it stops reading like a plan. Two reasons:
+
+- **Wrong data shape.** `EvidenceItem` is built around `text`, `author`,
+  `published_at` and `engagement`. A prediction market has none of those. It
+  would be numeric market data forced through a text-evidence model.
+- **It needs the editorial layer this project refuses to have.** Deciding which
+  markets are "related to a topic" is a scoring judgement, which is exactly what
+  design principle 4 rules out.
+
+It is a different product. If the "what changed recently?" signal is ever wanted,
+it belongs somewhere else.
 
 ### R4 · The MCP boundary — ✅ **decided: keep it**
 
