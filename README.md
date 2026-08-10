@@ -1,7 +1,8 @@
 # Net-Razor
 
-Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, and YouTube for a
-local LLM in a **deterministic, fully audited** way.
+Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, and YouTube for an
+LLM in a **deterministic, fully audited** way. Any MCP host can drive it — an IDE extension,
+Claude Code, an agent framework — and the audit trail is the same regardless of which one did.
 
 Design principles:
 
@@ -22,6 +23,25 @@ required.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and where the code
 currently falls short of the principles above; [TODO.md](TODO.md) tracks the fixes.
+
+### Why MCP, and not just a Python library?
+
+`create_app()` has no dependency on MCP — the CLI drives the whole system as a plain library, so
+importing it directly into an agent would work today. MCP is a deliberate choice on top of that,
+for two reasons:
+
+**Portability.** One server, any host that speaks the protocol: an IDE extension, Claude Code, a
+LangGraph agent, a desktop client. Each one would otherwise need its own binding, and the tool
+descriptions — including the ones tuned to steer a model toward the incremental YouTube flow —
+would have to be re-written per host instead of travelling with the server.
+
+**Containment.** Net-Razor spawns a Node subprocess for X search and runs blocking transcript
+fetches in worker threads. A separate process is one an agent can kill and restart; in-process,
+a wedged fetch takes the agent down with it.
+
+The cost is a schema hop — pydantic models are re-expressed as JSON Schema at the boundary rather
+than being the contract directly — and a dependency on the launching host's environment, which is
+why `NODE_BINARY` sometimes needs an absolute path. Both are accepted on purpose.
 
 ## Setup
 
@@ -45,8 +65,8 @@ lowest-priority source, not the only one.
 
 ### A working `.env`
 
-A typical setup is X cookies (only if you want X search), a list of YouTube channels to follow,
-and a couple of defaults for a scheduled run:
+A typical setup is X cookies (only if you want X search) and a couple of defaults for a
+scheduled run. The YouTube channel list lives in its own file, not here:
 
 ```dotenv
 # X search — cookies from a logged-in x.com session (omit these if you don't use X)
@@ -163,7 +183,7 @@ API-based `YT_SEARCH_MODE=channels` *query* search is a different tool and ignor
 context is plentiful, but it grows with channel count. For a small-context/local LLM, prefer the
 **incremental** flow, which keeps peak context flat regardless of how many channels you track:
 
-1. `net_razor_yt_new_videos` (CLI: `net-razor yt-new-videos`) returns a compact **queue** —
+1. `net_razor_yt_new_videos` returns a compact **queue** —
    channel, title, url, id, published_at for recent videos, **no transcripts**. By default it
    excludes videos explicitly acknowledged with `net_razor_yt_mark_processed`, so it's a durable
    work list; pass `include_processed` to see the full window. A five-video queue is ~1.5 KB. It
@@ -171,7 +191,9 @@ context is plentiful, but it grows with channel count. For a small-context/local
 2. For each queued video, call `net_razor_yt_transcript` (capped at `YT_MAX_TRANSCRIPT_CHARS`),
    summarize it, and move on. Only **one** transcript is ever in context at a time.
 3. After downstream summarization and final validation succeed, call
-   `net_razor_yt_mark_processed` once with the successful transcript call IDs.
+   `net_razor_yt_mark_processed` once with the successful transcript call IDs. It acknowledges
+   every ID it can and reports the rest in `invalid_call_ids` — one stale ID never discards the
+   acknowledgements next to it.
 
 A video leaves the queue only after acknowledgement, so a run that stops during transcript
 processing or synthesis can safely discover it again. Repeating an acknowledgement is harmless.
@@ -179,7 +201,7 @@ Caption-less videos recur only until they age out of the channel's recent feed (
 
 ### Channel digest
 
-The `net_razor_yt_channel_digest` tool (CLI: `net-razor yt-channel-digest`) walks each
+The `net_razor_yt_channel_digest` tool walks each
 configured channel, pulls its most recent uploads within the time window, fetches transcripts for
 the top few, and returns the results **grouped per channel** — each channel keeps its own list
 instead of everything being merged and re-ranked into one feed. It records a parent audit call
@@ -191,8 +213,8 @@ is involved and nothing is tied to a Google account. Two consequences of the RSS
 channel's roughly-15 most recent uploads are visible (no deep history), and items carry view
 counts but not likes/comments. Both discovery and transcripts honor `YT_PROXY_URL`.
 
-Its parameters are set **per call** (by the agent, or on the `yt-channel-digest` CLI) — you don't
-put these in `.env`; their defaults come from the config variables shown below. All are optional:
+Its parameters are set **per call** by the agent — you don't put these in `.env`; their
+defaults come from the config variables shown below. All are optional:
 
 | Parameter | Meaning | Default |
 | --- | --- | --- |
@@ -213,18 +235,14 @@ digest — it reads the video IDs straight from the audit store, so no external 
 Each channel then reports a `skipped_seen` count. When a call omits `only_new`, it follows the
 `YT_DIGEST_ONLY_NEW` config default; set `YT_DIGEST_ONLY_NEW=true` to make dedup the default for a
 scheduled run. Because dedup absorbs overlap, you can safely widen the window as a catch-up
-safety net — e.g. a daily job with `--only-new --days 7` never misses a video and never repeats
-one:
+safety net — a scheduled run with `only_new` and `days: 7` never misses a video and never
+repeats one.
 
-```bash
-.venv/bin/net-razor yt-channel-digest --only-new --days 7
-```
-
-**Transcript length.** Transcripts are capped to `max_transcript_chars` (default `40000` ≈ ~10k
-tokens ≈ a ~35-minute video at normal speaking pace) so a single long livestream can't blow the
-LLM's context — this is a deterministic bound, independent of how the agent or host manages
-context. Capped items set `truncated: true`; `net_razor_yt_transcript` returns `truncated` and
-`full_char_count`, and accepts `max_chars=0` for the complete text.
+**Transcript length.** Digest items are capped at `max_transcript_chars` (default `40000` ≈ ~10k
+tokens ≈ a ~35-minute video at normal speaking pace), so one long livestream can't blow the
+caller's context. That bound is deterministic — it does not depend on how the agent or host
+manages context. A capped item sets `truncated: true`, and the full text is recoverable from
+`net_razor_yt_transcript` without re-fetching from YouTube (see below).
 
 ### Reading a long video in parts
 
@@ -262,20 +280,29 @@ that mix regular uploads with caption-less livestreams.
 
 ## MCP
 
-Configure Hermes, or another MCP host, to launch the server over stdio:
+Any MCP host launches the server over stdio. The two things every host needs are the
+interpreter and the module:
 
-```yaml
-mcp_servers:
-  net-razor:
-    command: <repo-root>/.venv/bin/python
-    args: [-m, net_razor.mcp]
-    env: {}
-    enabled: true
-    timeout: 60
-    connect_timeout: 30
+```
+command: <repo-root>/.venv/bin/python
+args:    [-m, net_razor.mcp]
 ```
 
-Replace `<repo-root>` with the checkout path on that machine. Config and the audit database
+Expressed as JSON, which is what most hosts want:
+
+```json
+{
+  "mcpServers": {
+    "net-razor": {
+      "command": "<repo-root>/.venv/bin/python",
+      "args": ["-m", "net_razor.mcp"]
+    }
+  }
+}
+```
+
+Replace `<repo-root>` with the checkout path on that machine. A host that supports timeouts
+should allow at least 60s, since a digest across several channels fetches transcripts. Config and the audit database
 resolve relative to the checkout, not the working directory, so no `cwd` is required — this
 works because the documented setup is an **editable** install (`pip install -e`). Under a
 non-editable `pip install .` the package lives in `site-packages`, the checkout markers are
@@ -300,10 +327,15 @@ Available MCP tools:
 - `net_razor_yt_transcript`
 - `net_razor_yt_mark_processed`
 
-Note that the tool schemas are laxer than the server's actual validation — `mode`, `sort`,
-`days`, `transcript_limit` and `languages` are exposed as plain strings and integers while the
-server enforces enums and ranges, so a model can only discover a constraint by violating it.
-That is [TODO.md](TODO.md) T20.
+The tool schemas carry the constraints the server actually enforces — `mode` and `sort` expose
+their enums, `sources` exposes `["x","hn","yt"]`, and the integer parameters expose their ranges.
+A model can see what will be rejected instead of discovering it by being rejected.
+
+Handled failures come back **inside** a successful response as
+`errors: [{type, message, details, retriable}]`, never as a protocol fault, so a caller can read
+and act on them. `retriable` distinguishes "wait and try again" (`rate_limited`, `timeout`,
+`upstream_error`) from "this will fail identically forever" (`not_configured`,
+`invalid_video_url`, `transcripts_disabled`).
 
 **Agent prompt.** [prompts/youtube-digest.md](prompts/youtube-digest.md) is host-neutral prompt
 guidance for the "summarize my channels" workflow — the one-video-at-a-time loop that keeps peak
@@ -389,9 +421,7 @@ The one exception is X, which stores the vendored Node backend's parsed item rat
 upstream GraphQL response — the raw payload never crosses the subprocess boundary. Treat "raw"
 on the X path as "what the backend returned," not "what x.com returned."
 
-**Retention is manual.** Nothing prunes automatically; growth is roughly 30 KB per call. The
-database is expendable — deleting it costs you history and the acknowledged-video list, not the
-ability to run.
+**Retention is manual.** Nothing prunes automatically; growth is roughly 30 KB per call.
 
 ## Safety notes
 

@@ -509,20 +509,19 @@ endpoints. Extract market title, question, top-outcome odds, price movement, end
 date, URL. Use volume/liquidity for context but keep dollar figures out of
 user-facing summaries; caveat thin, wide-spread, or weakly matched markets.
 
-### R4 · Reconsider the MCP boundary
+### R4 · The MCP boundary — ✅ **decided: keep it**
 
-`create_app()` is fully independent of `create_server()` — the CLI proves the
-system runs as a plain library. If the only consumer is a LangGraph agent in the
-same environment, importing `create_app()` into a tool node would remove the
-separate process, the JSON-RPC hop, the schema-fidelity loss (T20 disappears
-entirely — pydantic models become the tool schemas), and the "is Node on `PATH`
-under a sparse environment" class of problems.
+Closed. The review raised this when the stated consumer was a single LangGraph
+agent, where "reuse across clients" — the main reason to pay for a protocol —
+did not apply. That premise was wrong: the goal is for **any MCP host** to drive
+this, an IDE extension or Claude Code as readily as an agent framework.
 
-**The counter-argument is real:** process isolation. A wedged transcript thread or
-runaway Node subprocess is contained in a process the agent can kill; in-process
-it takes the agent down too. Right now, with T1 outstanding, that isolation is
-doing genuine work.
+With more than one consumer the calculus flips entirely, and the containment
+argument (a Node subprocess and blocking transcript threads live in a process an
+agent can kill) still holds on top of it. Rationale is now written into the
+README under "Why MCP, and not just a Python library?", so it does not have to be
+re-derived.
 
-**So: finish T1, then ask again.** If the answer is still "keep MCP for crash
-containment," that's a good reason — write it in the README, because no document
-currently says *why* this is a server rather than a library.
+The costs are accepted knowingly: a schema hop at the boundary, and a dependency
+on the launching host's environment — which is why `NODE_BINARY` sometimes needs
+an absolute path.
