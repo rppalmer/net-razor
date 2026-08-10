@@ -1,6 +1,7 @@
 # Net-Razor
 
-Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, and YouTube for an
+Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, YouTube, and arXiv
+for an
 LLM in a **deterministic, fully audited** way. Any MCP host can drive it — an IDE extension,
 Claude Code, an agent framework — and the audit trail is the same regardless of which one did.
 
@@ -278,6 +279,39 @@ beyond the fetch limit) and `text` falls back to the video's **description**. Th
 entirely — each channel then reports a `skipped_no_transcript` count. This is useful for channels
 that mix regular uploads with caption-less livestreams.
 
+## arXiv
+
+`net_razor_arxiv_search` searches arXiv preprints and returns their **abstracts** — 1–2k
+characters of author-written summary each, which is real content rather than a headline. arXiv is
+frequently the primary source that AI discussion on X and YouTube is reacting to, often weeks
+earlier.
+
+**No API key, no account, no configuration.** The API is open; the source identifies itself with
+a descriptive User-Agent and spaces its own requests about three seconds apart, which is what
+arXiv asks of automated clients. Bursting past that earns a 429 within a couple of requests.
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `query` | Plain text, or arXiv field syntax such as `ti:"..."`, `au:`, `abs:` | *required* |
+| `categories` | Subject classes to restrict to, e.g. `["cs.AI", "cs.CL"]` | all of arXiv |
+| `days` | Lookback window | `7` |
+| `max_results` | Papers to return (1–50) | `25` |
+| `sort` | `submitted`, `updated`, or `relevance` | `submitted` |
+
+Useful categories: `cs.AI`, `cs.CL` (natural language / LLMs), `cs.LG` (machine learning),
+`cs.CR` (security).
+
+Two things that differ from the other sources, and are deliberate:
+
+- **`days` defaults to 7, not 1.** arXiv only announces on weekdays, so a one- or two-day window
+  returns nothing over a weekend. Papers aren't news; a week is the right granularity.
+- **Engagement is always zero.** arXiv publishes no votes, views or comment counts. Nothing is
+  invented to fill the field — and with nothing to rank by, the no-editorial-layer principle
+  holds by construction.
+
+The time window is applied by arXiv itself via `submittedDate`, not filtered locally, so
+`effective_request.search_query` shows exactly what was asked upstream.
+
 ## MCP
 
 Any MCP host launches the server over stdio. The two things every host needs are the
@@ -321,6 +355,7 @@ Available MCP tools:
 - `net_razor_run_detail`
 - `net_razor_x_search`
 - `net_razor_hn_search`
+- `net_razor_arxiv_search`
 - `net_razor_yt_search`
 - `net_razor_yt_new_videos`
 - `net_razor_yt_channel_digest`

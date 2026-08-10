@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "net_razor_runs",
     "net_razor_run_detail",
     "net_razor_x_search",
+    "net_razor_arxiv_search",
     "net_razor_hn_search",
     "net_razor_yt_search",
     "net_razor_yt_new_videos",

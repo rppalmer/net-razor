@@ -7,6 +7,7 @@ from pydantic import Field
 
 from net_razor.app import App, create_app
 from net_razor.models import (
+    ArxivRequest,
     HNRequest,
     ResearchRequest,
     SourceName,
@@ -83,6 +84,39 @@ def create_server(app: App | None = None) -> FastMCP:
 
         return await net_razor_app.hn_search(
             HNRequest(query=query, max_results=max_results, days=days, sort=sort)
+        )
+
+    @mcp.tool()
+    async def net_razor_arxiv_search(
+        query: str,
+        max_results: Annotated[int, Field(ge=1, le=50)] = 25,
+        days: Annotated[int, Field(ge=1, le=3650)] = 7,
+        categories: list[str] | None = None,
+        sort: Literal["submitted", "relevance", "updated"] = "submitted",
+    ) -> dict[str, Any]:
+        """Search arXiv preprints and return their abstracts (audited).
+
+        Use this for research papers — the primary source that AI/ML discussion on
+        social media and YouTube is usually reacting to, often weeks earlier. Each
+        result carries the full author-written abstract (~1-2k characters), not a
+        summary snippet.
+
+        `categories` restricts to arXiv subject classes, e.g. ["cs.AI", "cs.CL"]
+        (natural language), ["cs.LG"] (machine learning), ["cs.CR"] (security).
+        `query` accepts plain text, or arXiv field syntax like `ti:"..."` or `au:`.
+
+        Note arXiv only announces on weekdays, so `days` under about 4 can return
+        nothing over a weekend. There are no vote or comment counts on arXiv, so
+        every result reports zero engagement."""
+
+        return await net_razor_app.arxiv_search(
+            ArxivRequest(
+                query=query,
+                max_results=max_results,
+                days=days,
+                categories=categories or [],
+                sort=sort,
+            )
         )
 
     @mcp.tool()

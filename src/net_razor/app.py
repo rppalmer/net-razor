@@ -13,6 +13,7 @@ from net_razor.config import Settings, get_settings
 from net_razor.diagnostics import build_doctor_report
 from net_razor.logging import configure_json_logging
 from net_razor.models import (
+    ArxivRequest,
     HNRequest,
     ResearchRequest,
     ServiceErrorItem,
@@ -25,6 +26,7 @@ from net_razor.models import (
     YTRequest,
     YTTranscriptRequest,
 )
+from net_razor.sources.arxiv import ArxivSource, HttpArxivClient
 from net_razor.sources.base import Source
 from net_razor.sources.hn import HNSource, HttpHNClient
 from net_razor.sources.x import XSource
@@ -120,6 +122,17 @@ def _yt_leg(request: ResearchRequest) -> YTRequest:
     )
 
 
+def _arxiv_leg(request: ResearchRequest) -> ArxivRequest:
+    # arXiv announces on weekdays only, so a research window of a day or two finds
+    # nothing. Widen just this leg -- the effective window is echoed back per source.
+    return ArxivRequest(
+        query=request.topic,
+        max_results=min(request.max_results_per_source, 50),
+        days=max(request.days, 7),
+        sort="submitted",
+    )
+
+
 @dataclass
 class App:
     """Composition root. Every tool call is audited at this boundary; the sources
@@ -143,6 +156,9 @@ class App:
 
     async def yt_search(self, request: YTRequest) -> dict[str, Any]:
         return await self._search_tool("yt_search", self.sources["yt"].source, request)
+
+    async def arxiv_search(self, request: ArxivRequest) -> dict[str, Any]:
+        return await self._search_tool("arxiv_search", self.sources["arxiv"].source, request)
 
     async def yt_transcript(self, request: YTTranscriptRequest) -> dict[str, Any]:
         max_chars = (
@@ -566,6 +582,8 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         logger=logging.getLogger("net_razor.sources.hn"),
     )
 
+    arxiv_source = ArxivSource(HttpArxivClient(resolved.request_timeout_seconds))
+
     transcript_client = YouTubeTranscriptClient(
         resolved.proxy_url_value, timeout_seconds=resolved.request_timeout_seconds
     )
@@ -607,6 +625,9 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
             "x": SourceEntry(source=x_source, label="X", build_request=_x_leg),
             "hn": SourceEntry(source=hn_source, label="HN", build_request=_hn_leg),
             "yt": SourceEntry(source=yt_source, label="YT", build_request=_yt_leg),
+            "arxiv": SourceEntry(
+                source=arxiv_source, label="arXiv", build_request=_arxiv_leg
+            ),
         },
         yt_transcript_fetcher=yt_transcript_fetcher,
         yt_channel_digest_source=yt_channel_digest_source,

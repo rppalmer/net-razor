@@ -14,10 +14,12 @@ from pydantic import (
     model_validator,
 )
 
-SourceName = Literal["x", "hn", "yt"]
+SourceName = Literal["x", "hn", "yt", "arxiv"]
 
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
+# An arXiv subject class: an archive, optionally a dotted subclass. "cs.AI", "math.AT", "econ".
+_ARXIV_CATEGORY = re.compile(r"^[a-z][a-z-]*(\.[A-Za-z]{2,})?$")
 
 
 # --------------------------------------------------------------------------- #
@@ -78,7 +80,7 @@ class EvidenceItem(BaseModel):
     source: SourceName
     source_backend: str
     source_id: str
-    item_type: Literal["post", "video", "transcript"] = "post"
+    item_type: Literal["post", "video", "transcript", "paper"] = "post"
     canonical_url: str
     title: str | None = None
     text: str
@@ -176,6 +178,40 @@ class YTRequest(_TextQuery):
 
     @model_validator(mode="after")
     def _validate_dates(self) -> YTRequest:
+        if self.since and self.until and self.until <= self.since:
+            raise ValueError("until must be after since")
+        return self
+
+
+class ArxivRequest(_TextQuery):
+    """Search arXiv preprints.
+
+    ``days`` defaults to 7 rather than 1 because arXiv announces on weekdays only —
+    a one-day window returns nothing on a Monday, and papers are not news.
+    """
+
+    query: str
+    max_results: int = Field(default=25, ge=1, le=50)
+    days: int = Field(default=7, ge=1, le=3650)
+    since: date | None = None
+    until: date | None = None
+    # arXiv subject classes, e.g. ["cs.AI", "cs.CL"]. Empty searches all of arXiv.
+    categories: list[str] = Field(default_factory=list)
+    sort: Literal["submitted", "relevance", "updated"] = "submitted"
+
+    @field_validator("categories")
+    @classmethod
+    def _clean_categories(cls, value: list[str]) -> list[str]:
+        cleaned = [category.strip() for category in value if category.strip()]
+        for category in cleaned:
+            if not _ARXIV_CATEGORY.match(category):
+                raise ValueError(
+                    f"{category!r} is not an arXiv category (expected e.g. 'cs.AI')"
+                )
+        return cleaned
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> ArxivRequest:
         if self.since and self.until and self.until <= self.since:
             raise ValueError("until must be after since")
         return self

@@ -84,6 +84,8 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
                 "auth_mode": "env",
             },
             "hn": {"configured": True},
+            # No key, no account, no settings -- nothing to misconfigure.
+            "arxiv": {"configured": True},
             "yt": {
                 "api_key_configured": settings.youtube_api_key_value is not None,
                 "search_configured": settings.youtube_search_configured,

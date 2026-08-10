@@ -18,7 +18,7 @@ that share one core:
           │                            │
           ▼                            ▼
     mcp/server.py                  cli/main.py          protocol adapters —
-    11 @mcp.tool wrappers          6 operational cmds    no logic lives here
+    12 @mcp.tool wrappers          6 operational cmds    no logic lives here
           │                            │
           └─────────────┬──────────────┘
                         ▼
@@ -56,6 +56,7 @@ inject a fake transport instead of hitting the network.
 | Source | Class | Client | Upstream | Auth |
 | --- | --- | --- | --- | --- |
 | HN | `sources/hn.py` · `HNSource` | `HttpHNClient` | Algolia HN API | none |
+| arXiv | `sources/arxiv.py` · `ArxivSource` | `HttpArxivClient` | arXiv Atom API | none |
 | X | `sources/x/source.py` · `XSource` | `BirdXSearchBackend` → Node subprocess | x.com private GraphQL | session cookies |
 | YT search | `sources/yt/source.py` · `YTSource` | `HttpYouTubeSearchClient` | YouTube Data API | API key |
 | YT transcript | `sources/yt/source.py` · `YTTranscriptFetcher` | `YouTubeTranscriptClient` | youtube-transcript-api | none |
