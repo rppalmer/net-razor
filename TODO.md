@@ -396,13 +396,18 @@ a deterministic choice with no opinion about relevance. A regression test proves
 `order="date"` survives even when a low-view older video would previously have
 been hoisted.
 
-### T17 · Record the vendored backend's provenance — **low**
+### T17 · Record the vendored backend's provenance — **closed, won't do**
 
-`sources/x/vendor/bird-search/UPSTREAM.md` pins to "Bird v0.8.0" in prose, with
-no URL and no commit. Add the source repository and the exact commit or release
-tag. When X changes its API and the query IDs go stale, that's the difference
-between a five-minute update and an afternoon of archaeology. ~5m — but only you
-know where it came from.
+The review wanted a source URL and exact commit added to
+`sources/x/vendor/bird-search/UPSTREAM.md`, which pins to "Bird v0.8.0" in prose.
+Closed as accepted-as-is: the existing attribution names the upstream project,
+version and licence, and states what was deliberately left out.
+
+Worth knowing what that costs, so nobody re-litigates it later: when X rotates
+its GraphQL query IDs the vendored copy goes stale, and there is no recorded
+pointer to check for a newer one. The code degrades gracefully — there is a
+query-ID discovery fallback and an `upstream_changed` error type — so this is a
+maintenance cost, not a failure mode.
 
 ### T18 · Close the test gaps — ✅ **done**
 
