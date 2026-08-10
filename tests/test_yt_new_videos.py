@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 import pytest
 
 from net_razor.audit.recorder import AuditRecorder
-from net_razor.models import EvidenceAuthor, EvidenceItem, YTNewVideosRequest
+from net_razor.models import (
+    EvidenceAuthor,
+    EvidenceItem,
+    YTMarkProcessedRequest,
+    YTNewVideosRequest,
+)
 from net_razor.sources.yt.channel_ref import ResolvedChannel
 from net_razor.sources.yt.search_client import YouTubeVideoCandidate
 
@@ -43,21 +48,44 @@ def _yt_transcript_item(video_id: str) -> EvidenceItem:
     )
 
 
-@pytest.mark.asyncio
-async def test_new_videos_lists_newest_first_and_excludes_transcribed(make_app, store, clock):
-    discovery = _FakeDiscovery({"UC1": [_candidate("vidnew0002", 5), _candidate("vidold0001", 3)]})
-    app = make_app(yt_discovery=discovery)
-
-    # Simulate one of them already processed via yt_transcript.
+async def _record_transcript_call(
+    store, clock, video_id: str = "vidold0001"
+) -> str:
     recorder = AuditRecorder(store, clock)
     async with recorder.call(tool="yt_transcript", source="yt", request={}) as call:
-        call.record(effective_request={}, items=[_yt_transcript_item("vidold0001")],
-                    raw={}, errors=[])
+        call.record(
+            effective_request={},
+            items=[_yt_transcript_item(video_id)],
+            raw={},
+            errors=[],
+        )
+        return call.id
 
-    response = await app.yt_new_videos(YTNewVideosRequest(channels=["@chan"]))
-    assert response["count"] == 1
-    assert [v["video_id"] for v in response["videos"]] == ["vidnew0002"]  # transcribed one dropped
-    assert response["videos"][0]["url"].endswith("vidnew0002")
+
+@pytest.mark.asyncio
+async def test_new_videos_excludes_only_acknowledged_transcripts(make_app, store, clock):
+    discovery = _FakeDiscovery({"UC1": [_candidate("vidnew0002", 5), _candidate("vidold0001", 3)]})
+    app = make_app(yt_discovery=discovery)
+    transcript_call_id = await _record_transcript_call(store, clock)
+
+    before_acknowledgement = await app.yt_new_videos(
+        YTNewVideosRequest(channels=["@chan"])
+    )
+    acknowledgement = await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=[transcript_call_id])
+    )
+    after_acknowledgement = await app.yt_new_videos(
+        YTNewVideosRequest(channels=["@chan"])
+    )
+
+    assert [video["video_id"] for video in before_acknowledgement["videos"]] == [
+        "vidnew0002",
+        "vidold0001",
+    ]
+    assert acknowledgement["acknowledged_video_ids"] == ["vidold0001"]
+    assert [video["video_id"] for video in after_acknowledgement["videos"]] == [
+        "vidnew0002"
+    ]
 
 
 @pytest.mark.asyncio
@@ -65,15 +93,80 @@ async def test_new_videos_include_processed_returns_all(make_app, store, clock):
     discovery = _FakeDiscovery({"UC1": [_candidate("vidnew0002", 5), _candidate("vidold0001", 3)]})
     app = make_app(yt_discovery=discovery)
 
-    recorder = AuditRecorder(store, clock)
-    async with recorder.call(tool="yt_transcript", source="yt", request={}) as call:
-        call.record(effective_request={}, items=[_yt_transcript_item("vidold0001")],
-                    raw={}, errors=[])
+    transcript_call_id = await _record_transcript_call(store, clock)
+    await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=[transcript_call_id])
+    )
 
     response = await app.yt_new_videos(
         YTNewVideosRequest(channels=["@chan"], include_processed=True)
     )
     assert response["count"] == 2  # nothing excluded
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_is_idempotent(make_app, store, clock):
+    app = make_app()
+    transcript_call_id = await _record_transcript_call(store, clock)
+
+    first = await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=[transcript_call_id])
+    )
+    second = await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=[transcript_call_id])
+    )
+
+    assert first["acknowledged_video_ids"] == ["vidold0001"]
+    assert first["already_acknowledged_video_ids"] == []
+    assert second["acknowledged_video_ids"] == []
+    assert second["already_acknowledged_video_ids"] == ["vidold0001"]
+
+
+@pytest.mark.asyncio
+async def test_processed_state_survives_audit_pruning(make_app, store, clock):
+    app = make_app()
+    transcript_call_id = await _record_transcript_call(store, clock)
+    await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=[transcript_call_id])
+    )
+
+    store.prune(before="2027-01-01T00:00:00+00:00")
+
+    assert store.processed_youtube_video_ids() == {"vidold0001"}
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_keeps_the_valid_ids_and_reports_the_rest(
+    make_app, store, clock
+):
+    """One stale ID must not discard work the agent already finished."""
+    app = make_app()
+    transcript_call_id = await _record_transcript_call(store, clock)
+
+    response = await app.yt_mark_processed(
+        YTMarkProcessedRequest(
+            transcript_call_ids=[transcript_call_id, "missing-call"]
+        )
+    )
+
+    assert response["acknowledged_video_ids"] == ["vidold0001"]
+    assert response["invalid_call_ids"] == ["missing-call"]
+    assert response["errors"][0]["type"] == "invalid_transcript_call_id"
+    # the good one really landed -- it won't come back in the queue
+    assert store.processed_youtube_video_ids() == {"vidold0001"}
+
+
+@pytest.mark.asyncio
+async def test_mark_processed_with_only_invalid_ids_acknowledges_nothing(
+    make_app, store
+):
+    app = make_app()
+    response = await app.yt_mark_processed(
+        YTMarkProcessedRequest(transcript_call_ids=["nope-1", "nope-2"])
+    )
+    assert response["acknowledged_video_ids"] == []
+    assert response["invalid_call_ids"] == ["nope-1", "nope-2"]
+    assert store.processed_youtube_video_ids() == set()
 
 
 @pytest.mark.asyncio
@@ -91,3 +184,63 @@ async def test_new_videos_requires_channels(make_app):
     response = await app.yt_new_videos(YTNewVideosRequest(channels=[]))
     assert response["count"] == 0 and response["videos"] == []
     assert response["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_channel_does_not_cost_the_others(make_app):
+    """A dead feed yields a caveat and is skipped; the working channels still return."""
+    import httpx
+
+    class _PartlyBrokenDiscovery:
+        async def resolve_channels(self, refs):
+            return [
+                ResolvedChannel(source_ref=refs[0], channel_id="UC_ok"),
+                ResolvedChannel(source_ref=refs[0], channel_id="UC_broken"),
+            ], []
+
+        async def recent_videos(self, channel_id, window, max_results):
+            if channel_id == "UC_broken":
+                raise httpx.ConnectError("feed unreachable")
+            return [_candidate("vidgood0001", 5)]
+
+    app = make_app(yt_discovery=_PartlyBrokenDiscovery())
+    response = await app.yt_new_videos(YTNewVideosRequest(channels=["@chan"]))
+
+    assert [video["video_id"] for video in response["videos"]] == ["vidgood0001"]
+    assert any("UC_broken" in caveat for caveat in response["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_channel_fetches_are_concurrent_but_bounded(make_app):
+    """Concurrent enough to be fast, bounded enough not to look like scraping."""
+    import asyncio
+
+    from net_razor.sources.yt.channels import CHANNEL_CONCURRENCY
+
+    class _ConcurrencyProbe:
+        def __init__(self, channel_count):
+            self._ids = [f"UC{index:022d}" for index in range(channel_count)]
+            self.in_flight = 0
+            self.peak = 0
+
+        async def resolve_channels(self, refs):
+            return [
+                ResolvedChannel(source_ref=refs[0], channel_id=channel_id)
+                for channel_id in self._ids
+            ], []
+
+        async def recent_videos(self, channel_id, window, max_results):
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            try:
+                await asyncio.sleep(0)  # yield so overlap is observable
+                return []
+            finally:
+                self.in_flight -= 1
+
+    probe = _ConcurrencyProbe(channel_count=12)
+    app = make_app(yt_discovery=probe)
+    await app.yt_new_videos(YTNewVideosRequest(channels=["@chan"]))
+
+    assert probe.peak > 1, "channels must not be fetched one at a time"
+    assert probe.peak <= CHANNEL_CONCURRENCY

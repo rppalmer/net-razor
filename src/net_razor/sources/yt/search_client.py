@@ -10,6 +10,10 @@ from net_razor.clock import ResolvedWindow
 from net_razor.models import YTRequest
 from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel, dedupe_resolved
 
+# The Data API host. A constant rather than a setting, for the same reason as
+# HN_ALGOLIA_BASE_URL: one correct value, and tests inject a transport.
+YOUTUBE_API_BASE_URL = "https://www.googleapis.com"
+
 
 class YouTubeSearchError(Exception):
     def __init__(self, error_type: str, message: str, *, details: dict[str, Any] | None = None):
@@ -48,9 +52,9 @@ class HttpYouTubeSearchClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str,
         timeout_seconds: float,
         *,
+        base_url: str = YOUTUBE_API_BASE_URL,
         channel_refs: list[ChannelRef] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -118,21 +122,6 @@ class HttpYouTubeSearchClient:
         self._resolve_cache[key] = channel
         return channel
 
-    async def search_channel(
-        self, channel_id: str, window: ResolvedWindow, max_results: int
-    ) -> list[YouTubeVideoCandidate]:
-        """Return the most recent videos from one channel within the window."""
-
-        async with self._client() as client:
-            candidates = await self._channel_page(client, channel_id, window, max_results)
-            if not candidates:
-                return []
-            details = await self._fetch_details(client, candidates)
-        stats = _parse_statistics(details)
-        enriched = [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
-        enriched.sort(key=lambda c: c.published_at, reverse=True)
-        return enriched[:max_results]
-
     async def _broad_search(
         self, request: YTRequest, window: ResolvedWindow
     ) -> list[YouTubeVideoCandidate]:
@@ -157,8 +146,10 @@ class HttpYouTubeSearchClient:
             details = await self._fetch_details(client, candidates)
 
         stats = _parse_statistics(details)
-        enriched = [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
-        return _rank_candidates(enriched, request.query)
+        # Returned in the API's order, which is what `order` asked for. Re-sorting
+        # here used to silently override it -- order="date" came back ranked by
+        # term hits and view count.
+        return [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
 
     async def _channel_limited_search(
         self, request: YTRequest, window: ResolvedWindow
@@ -180,7 +171,10 @@ class HttpYouTubeSearchClient:
 
         stats = _parse_statistics(details)
         enriched = [_merge_statistics(c, stats.get(c.video_id, {})) for c in candidates]
-        return _rank_candidates(enriched, request.query)[: request.max_results]
+        # Merged from several channels, so some order has to be chosen. Newest
+        # first is deterministic and carries no opinion about relevance.
+        enriched.sort(key=lambda candidate: candidate.published_at, reverse=True)
+        return enriched[: request.max_results]
 
     async def _channel_page(
         self,
@@ -327,16 +321,3 @@ def _merge_statistics(
         comment_count=statistics.get("comment_count", 0),
         raw={**candidate.raw, "statistics": statistics},
     )
-
-
-def _rank_candidates(
-    candidates: list[YouTubeVideoCandidate], query: str
-) -> list[YouTubeVideoCandidate]:
-    terms = [term.lower() for term in query.split() if len(term) > 2]
-
-    def score(candidate: YouTubeVideoCandidate) -> tuple[int, int, datetime]:
-        haystack = f"{candidate.title} {candidate.description}".lower()
-        term_hits = sum(1 for term in terms if term in haystack)
-        return (term_hits, candidate.view_count, candidate.published_at)
-
-    return sorted(candidates, key=score, reverse=True)

@@ -4,6 +4,7 @@ import asyncio
 import re
 import shutil
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,24 @@ ProcessRunner = Callable[
     [str, Path, dict[str, Any], dict[str, str], float], Awaitable[dict[str, Any]]
 ]
 SleepFunction = Callable[[float], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class XSearchTuning:
+    """Retry and pacing numbers for the X backend.
+
+    Code constants rather than environment variables: nobody tunes retry backoff
+    on a personal tool, and if a default is wrong the fix is a commit, not a .env
+    edit. Injectable so tests can drop the waits to zero.
+    """
+
+    subprocess_timeout_seconds: float = 45.0
+    upstream_timeout_seconds: float = 20.0
+    max_attempts: int = 3
+    retry_backoff_seconds: float = 1.0
+    # Minimum gap between two X requests from this process. The account, not just
+    # the IP, is what is at risk here, so requests are spaced on purpose.
+    request_spacing_seconds: float = 1.0
 
 _NODE_VERSION_PATTERN = re.compile(r"^v?(\d+)(?:\.\d+){0,2}")
 _ERROR_MESSAGES: dict[str, str] = {
@@ -40,10 +59,12 @@ class BirdXSearchBackend:
         self,
         settings: Settings,
         *,
+        tuning: XSearchTuning | None = None,
         process_runner: ProcessRunner = run_json_subprocess,
         sleep: SleepFunction = asyncio.sleep,
     ) -> None:
         self.settings = settings
+        self.tuning = tuning or XSearchTuning()
         self.process_runner = process_runner
         self.sleep = sleep
         self.script_path = (
@@ -123,20 +144,20 @@ class BirdXSearchBackend:
             "query": query,
             "count": count,
             "product": _MODE_PRODUCTS.get(mode, "Latest"),
-            "upstream_timeout_ms": int(self.settings.x_search_upstream_timeout_seconds * 1000),
+            "upstream_timeout_ms": int(self.tuning.upstream_timeout_seconds * 1000),
         }
 
-        for attempt in range(1, self.settings.x_search_max_attempts + 1):
+        for attempt in range(1, self.tuning.max_attempts + 1):
             try:
                 response = await self.process_runner(
                     node_path,
                     self.script_path,
                     payload,
                     environment,
-                    self.settings.x_search_subprocess_timeout_seconds,
+                    self.tuning.subprocess_timeout_seconds,
                 )
             except SourceError as exc:
-                if exc.error_type == "timeout" and attempt < self.settings.x_search_max_attempts:
+                if exc.error_type == "timeout" and attempt < self.tuning.max_attempts:
                     await self._backoff(attempt)
                     continue
                 raise
@@ -148,7 +169,7 @@ class BirdXSearchBackend:
                 return [item for item in items if isinstance(item, dict)]
 
             error = self._error_from_response(response, attempt)
-            max_attempts = self.settings.x_search_max_attempts
+            max_attempts = self.tuning.max_attempts
             if self._should_retry(response, error) and attempt < max_attempts:
                 await self._backoff(attempt)
                 continue
@@ -157,6 +178,6 @@ class BirdXSearchBackend:
         raise SourceError("request_failed", _ERROR_MESSAGES["request_failed"])
 
     async def _backoff(self, attempt: int) -> None:
-        delay = self.settings.x_search_retry_backoff_seconds * (2 ** (attempt - 1))
+        delay = self.tuning.retry_backoff_seconds * (2 ** (attempt - 1))
         if delay > 0:
             await self.sleep(delay)

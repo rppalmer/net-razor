@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from net_razor.app import App, create_app
 from net_razor.models import (
     HNRequest,
     ResearchRequest,
+    SourceName,
     XRequest,
     YTChannelDigestRequest,
+    YTMarkProcessedRequest,
     YTNewVideosRequest,
     YTRequest,
     YTTranscriptRequest,
@@ -23,9 +26,9 @@ def create_server(app: App | None = None) -> FastMCP:
     @mcp.tool()
     async def net_razor_research(
         topic: str,
-        days: int = 1,
-        sources: list[str] | None = None,
-        max_results_per_source: int = 10,
+        days: Annotated[int, Field(ge=1, le=3650)] = 1,
+        sources: list[SourceName] | None = None,
+        max_results_per_source: Annotated[int, Field(ge=1, le=50)] = 10,
     ) -> dict[str, Any]:
         """Fan out to the selected sources and return results grouped by source (unranked)."""
 
@@ -39,19 +42,13 @@ def create_server(app: App | None = None) -> FastMCP:
         )
 
     @mcp.tool()
-    async def net_razor_services() -> dict[str, Any]:
-        """List local Net-Razor runtime capabilities."""
-
-        return net_razor_app.services()
-
-    @mcp.tool()
     async def net_razor_doctor() -> dict[str, Any]:
         """Report local Net-Razor setup diagnostics without exposing secrets."""
 
         return net_razor_app.doctor()
 
     @mcp.tool()
-    async def net_razor_runs(limit: int = 20) -> dict[str, Any]:
+    async def net_razor_runs(limit: Annotated[int, Field(ge=1, le=500)] = 20) -> dict[str, Any]:
         """List recent audited tool calls (most recent first)."""
 
         return net_razor_app.runs(limit=limit)
@@ -64,7 +61,10 @@ def create_server(app: App | None = None) -> FastMCP:
 
     @mcp.tool()
     async def net_razor_x_search(
-        query: str, max_results: int = 10, days: int = 1, mode: str = "latest"
+        query: str,
+        max_results: Annotated[int, Field(ge=1, le=50)] = 10,
+        days: Annotated[int, Field(ge=1, le=3650)] = 1,
+        mode: Literal["latest", "top"] = "latest",
     ) -> dict[str, Any]:
         """Search X through the local runtime (audited)."""
 
@@ -74,7 +74,10 @@ def create_server(app: App | None = None) -> FastMCP:
 
     @mcp.tool()
     async def net_razor_hn_search(
-        query: str, max_results: int = 10, days: int = 1, sort: str = "latest"
+        query: str,
+        max_results: Annotated[int, Field(ge=1, le=50)] = 10,
+        days: Annotated[int, Field(ge=1, le=3650)] = 1,
+        sort: Literal["latest", "relevance"] = "latest",
     ) -> dict[str, Any]:
         """Search Hacker News through the local runtime (audited)."""
 
@@ -85,9 +88,9 @@ def create_server(app: App | None = None) -> FastMCP:
     @mcp.tool()
     async def net_razor_yt_search(
         query: str,
-        max_results: int = 10,
-        days: int = 1,
-        transcript_limit: int = 3,
+        max_results: Annotated[int, Field(ge=1, le=25)] = 10,
+        days: Annotated[int, Field(ge=1, le=3650)] = 1,
+        transcript_limit: Annotated[int, Field(ge=0, le=10)] = 3,
         fetch_transcripts: bool = True,
     ) -> dict[str, Any]:
         """Search YouTube and fetch transcripts for a small top set (audited)."""
@@ -104,8 +107,8 @@ def create_server(app: App | None = None) -> FastMCP:
 
     @mcp.tool()
     async def net_razor_yt_new_videos(
-        days: int = 7,
-        videos_per_channel: int = 10,
+        days: Annotated[int, Field(ge=1, le=3650)] = 7,
+        videos_per_channel: Annotated[int, Field(ge=1, le=25)] = 10,
         channels: list[str] | None = None,
         include_processed: bool = False,
     ) -> dict[str, Any]:
@@ -131,9 +134,9 @@ def create_server(app: App | None = None) -> FastMCP:
 
     @mcp.tool()
     async def net_razor_yt_channel_digest(
-        days: int = 7,
-        videos_per_channel: int = 5,
-        transcript_limit_per_channel: int = 2,
+        days: Annotated[int, Field(ge=1, le=3650)] = 7,
+        videos_per_channel: Annotated[int, Field(ge=1, le=25)] = 5,
+        transcript_limit_per_channel: Annotated[int, Field(ge=0, le=10)] = 2,
         fetch_transcripts: bool = True,
         channels: list[str] | None = None,
         only_new: bool | None = None,
@@ -170,11 +173,22 @@ def create_server(app: App | None = None) -> FastMCP:
         url: str,
         languages: list[str] | None = None,
         include_segments: bool = True,
-        max_chars: int | None = None,
+        max_chars: Annotated[int | None, Field(ge=0)] = None,
+        offset: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        """Fetch a transcript for one YouTube URL or video ID (audited). Text is capped at
-        max_chars (default YT_MAX_TRANSCRIPT_CHARS); pass max_chars=0 for the full transcript.
-        The response includes `truncated` and `full_char_count`."""
+        """Fetch a transcript for one YouTube URL or video ID (audited).
+
+        Long videos come back in parts. Each response carries `part`, `part_count`,
+        `truncated`, `full_char_count`, and `next_offset`. To read a long video in
+        full WITHOUT overflowing your context, call this again with the SAME url and
+        `offset` set to the previous response's `next_offset`, and keep going until
+        `next_offset` is null. Parts after the first are served from local storage,
+        so paging costs nothing upstream.
+
+        `max_chars` sets the size of each part (default YT_MAX_TRANSCRIPT_CHARS);
+        pass max_chars=0 to get the whole transcript in one response, which for a
+        long video will likely overflow a small context. Parts are cut on sentence
+        boundaries, never mid-word."""
 
         return await net_razor_app.yt_transcript(
             YTTranscriptRequest(
@@ -182,7 +196,22 @@ def create_server(app: App | None = None) -> FastMCP:
                 languages=languages or ["en"],
                 include_segments=include_segments,
                 max_chars=max_chars,
+                offset=offset,
             )
+        )
+
+    @mcp.tool()
+    async def net_razor_yt_mark_processed(
+        transcript_call_ids: list[str],
+    ) -> dict[str, Any]:
+        """Mark videos processed after downstream summarization succeeds.
+
+        Supply the call IDs returned by successful net_razor_yt_transcript calls.
+        The operation is audited, all-or-nothing, and safe to repeat.
+        """
+
+        return await net_razor_app.yt_mark_processed(
+            YTMarkProcessedRequest(transcript_call_ids=transcript_call_ids)
         )
 
     return mcp

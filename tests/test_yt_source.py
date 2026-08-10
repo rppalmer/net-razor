@@ -107,7 +107,8 @@ async def test_yt_transcript_fetcher_success():
 
 
 @pytest.mark.asyncio
-async def test_yt_transcript_fetcher_caps_text():
+async def test_yt_transcript_fetcher_cuts_on_segment_boundaries():
+    """A cap trims to the last whole segment that fits, never mid-word."""
     transcript = _FakeTranscript([_Segment("a" * 40, 0.0, 1.0), _Segment("b" * 40, 1.0, 1.0)])
     fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=transcript))
     result = await fetcher.transcript(
@@ -116,9 +117,80 @@ async def test_yt_transcript_fetcher_caps_text():
     )
     response = result.meta["response"]
     assert response["truncated"] is True
-    assert len(response["text"]) == 50
+    assert response["text"] == "a" * 40  # not 50 chars ending mid-segment
     assert response["full_char_count"] == 81  # 40 + newline + 40
+    assert response["part"] == 1 and response["part_count"] == 2
+    assert response["next_offset"] == 40
     assert result.items[0].truncated is True
+
+
+@pytest.mark.asyncio
+async def test_yt_transcript_paging_reaches_the_end():
+    """Following next_offset walks the whole transcript and then stops."""
+    segments = [_Segment("a" * 40, 0.0, 1.0), _Segment("b" * 40, 1.0, 1.0)]
+    fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=_FakeTranscript(segments)))
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    first = (await fetcher.transcript(YTTranscriptRequest(url=url), max_chars=50)).meta[
+        "response"
+    ]
+    second = (
+        await fetcher.transcript(
+            YTTranscriptRequest(url=url, offset=first["next_offset"]), max_chars=50
+        )
+    ).meta["response"]
+
+    assert second["text"] == "b" * 40
+    assert second["part"] == 2 and second["part_count"] == 2
+    assert second["next_offset"] is None
+    # every character is delivered exactly once across the two parts
+    assert len(first["text"]) + len(second["text"]) + 1 == first["full_char_count"]
+
+
+@pytest.mark.asyncio
+async def test_yt_transcript_offset_past_the_end_returns_empty_not_an_error():
+    transcript = _FakeTranscript([_Segment("a" * 40, 0.0, 1.0)])
+    fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=transcript))
+    result = await fetcher.transcript(
+        YTTranscriptRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", offset=9999),
+        max_chars=10,
+    )
+    response = result.meta["response"]
+    assert response["text"] == "" and response["next_offset"] is None
+    assert response["errors"] == []
+
+
+@pytest.mark.asyncio
+async def test_yt_transcript_stores_the_complete_transcript_not_the_capped_text():
+    """'Complete for the audit': the full text is recoverable after truncation."""
+    segments = [_Segment("a" * 40, 0.0, 1.0), _Segment("b" * 40, 1.0, 1.0)]
+    fetcher = YTTranscriptFetcher(_FakeTranscriptClient(result=_FakeTranscript(segments)))
+    result = await fetcher.transcript(
+        YTTranscriptRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ"), max_chars=50
+    )
+    stored = result.raw["dQw4w9WgXcQ"]
+    assert stored["segment_count"] == 2
+    assert [segment["text"] for segment in stored["segments"]] == ["a" * 40, "b" * 40]
+
+
+@pytest.mark.asyncio
+async def test_yt_transcript_served_from_cache_makes_no_upstream_call():
+    client = _FakeTranscriptClient(result=_FakeTranscript([_Segment("live", 0.0, 1.0)]))
+    fetcher = YTTranscriptFetcher(client)
+    cached = {
+        "language": "English", "language_code": "en", "is_generated": False,
+        "segments": [{"text": "from the store", "start": 0.0, "duration": 1.0}],
+    }
+    result = await fetcher.transcript(
+        YTTranscriptRequest(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+        max_chars=0,
+        cached=cached,
+    )
+    response = result.meta["response"]
+    assert response["text"] == "from the store"
+    assert response["from_cache"] is True
+    assert client.calls == []  # nothing hit YouTube
+    assert result.raw == {}  # and the stored copy wasn't duplicated
 
 
 @pytest.mark.asyncio

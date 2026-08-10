@@ -231,7 +231,7 @@ async def test_app_digest_groups_per_channel_and_surfaces_unresolved(make_app):
         resolved=resolved, unresolved=["@ghost"],
         items_by_channel={"UC1": [_item("vid00000001")], "UC2": []},
     )
-    app = make_app(yt_digest=digest)
+    app = make_app(yt_digest=digest, yt_discovery=digest)
 
     response = await app.yt_channel_digest(
         YTChannelDigestRequest(channels=["@a", "@b", "@ghost"])
@@ -256,7 +256,7 @@ async def test_app_digest_only_new_skips_previously_seen(make_app):
         ResolvedChannel(source_ref=ChannelRef("@aaa", "handle", "aaa"), channel_id="UC1", title="A")
     ]
     digest = _AppFakeDigest(resolved=resolved, unresolved=[], items_by_channel={"UC1": [item]})
-    app = make_app(yt_digest=digest)
+    app = make_app(yt_digest=digest, yt_discovery=digest)
 
     first = await app.yt_channel_digest(YTChannelDigestRequest(channels=["@aaa"]))
     assert first["channels"][0]["video_count"] == 1  # first run returns it
@@ -270,17 +270,17 @@ async def test_app_digest_only_new_skips_previously_seen(make_app):
 
 @pytest.mark.asyncio
 async def test_app_digest_only_new_defaults_from_config(make_app):
-    from tests.conftest import _StubSettings
-
-    class _OnlyNewSettings(_StubSettings):
-        yt_digest_only_new = True
+    from tests.conftest import stub_settings
 
     item = _item("vidcfg00001")
     resolved = [
         ResolvedChannel(source_ref=ChannelRef("@aaa", "handle", "aaa"), channel_id="UC1", title="A")
     ]
     digest = _AppFakeDigest(resolved=resolved, unresolved=[], items_by_channel={"UC1": [item]})
-    app = make_app(yt_digest=digest, settings=_OnlyNewSettings())
+    app = make_app(
+        yt_digest=digest, yt_discovery=digest,
+        settings=stub_settings(yt_digest_only_new=True),
+    )
 
     # only_new omitted on the request -> falls back to the config default (True)
     first = await app.yt_channel_digest(YTChannelDigestRequest(channels=["@aaa"]))
@@ -296,5 +296,6 @@ async def test_app_digest_requires_channels_not_api_key(make_app):
     response = await app.yt_channel_digest(YTChannelDigestRequest(channels=[]))
     assert response["channels"] == []
     assert response["caveats"] == [
-        "No YouTube channels configured. Set YOUTUBE_CHANNEL_IDS or pass channels."
+        "No YouTube channels configured. Add one per line to channels.txt, "
+        "or pass channels on the call."
     ]

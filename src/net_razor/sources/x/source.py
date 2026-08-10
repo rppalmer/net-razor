@@ -16,7 +16,7 @@ from net_razor.models import (
     ServiceErrorItem,
     XRequest,
 )
-from net_razor.sources.x.bird_backend import BirdXSearchBackend
+from net_razor.sources.x.bird_backend import BirdXSearchBackend, XSearchTuning
 from net_razor.sources.x.normalization import normalize_tweets
 from net_razor.sources.x.query import build_effective_query
 
@@ -26,9 +26,16 @@ class XSource:
 
     name = "x"
 
-    def __init__(self, settings: Settings, backend: BirdXSearchBackend) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        backend: BirdXSearchBackend,
+        *,
+        tuning: XSearchTuning | None = None,
+    ) -> None:
         self._settings = settings
         self._backend = backend
+        self._tuning = tuning or XSearchTuning()
         self._semaphore = asyncio.Semaphore(1)
         self._last_completed_at: float | None = None
         self._auth_status = "unknown"
@@ -47,7 +54,7 @@ class XSource:
 
         async with self._semaphore:
             if self._last_completed_at is not None:
-                delay = self._settings.x_search_delay_seconds - (
+                delay = self._tuning.request_spacing_seconds - (
                     loop.time() - self._last_completed_at
                 )
                 if delay > 0:
@@ -66,7 +73,6 @@ class XSource:
             except SourceError as exc:
                 if exc.error_type == "auth_failed":
                     self._auth_status = "expired"
-                effective["auth_status"] = self._auth_status
                 return FetchResult(
                     items=[],
                     raw={},
@@ -81,7 +87,6 @@ class XSource:
                 self._last_completed_at = loop.time()
 
         self._auth_status = "valid"
-        effective["auth_status"] = self._auth_status
         self._log.info(
             "search_completed source=x qhash=%s item_count=%s",
             query_hash(effective_query),

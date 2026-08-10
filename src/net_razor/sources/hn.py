@@ -20,6 +20,10 @@ from net_razor.models import (
 
 _HTML_TAG = re.compile(r"<[^>]+>")
 
+# The public HN search endpoint. A constant rather than a setting: it has one
+# correct value, and the tests inject an httpx transport instead of a URL.
+HN_ALGOLIA_BASE_URL = "https://hn.algolia.com/api/v1"
+
 
 class HNClient(Protocol):
     async def search(self, request: HNRequest, window: ResolvedWindow) -> dict[str, Any]:
@@ -29,9 +33,9 @@ class HNClient(Protocol):
 class HttpHNClient:
     def __init__(
         self,
-        base_url: str,
         timeout_seconds: float,
         *,
+        base_url: str = HN_ALGOLIA_BASE_URL,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -69,21 +73,14 @@ class HNSource:
         try:
             payload = await self._client.search(request, window)
         except (httpx.HTTPError, ValueError) as exc:
+            error = _classify(exc)
             self._log.warning(
-                "handled_error source=hn qhash=%s error_type=request_failed",
+                "handled_error source=hn qhash=%s error_type=%s",
                 query_hash(request.query),
+                error.type,
             )
             return FetchResult(
-                items=[],
-                raw={},
-                errors=[
-                    ServiceErrorItem(
-                        type="request_failed",
-                        message="HN search failed",
-                        details={"reason": str(exc)},
-                    )
-                ],
-                effective_request=effective,
+                items=[], raw={}, errors=[error], effective_request=effective
             )
 
         items, raw = _normalize(payload, request)
@@ -94,6 +91,37 @@ class HNSource:
             request.sort,
         )
         return FetchResult(items=items, raw=raw, errors=[], effective_request=effective)
+
+
+def _classify(exc: Exception) -> ServiceErrorItem:
+    """Name the failure precisely enough for a caller to decide what to do.
+
+    A 429 reported as a generic ``request_failed`` is indistinguishable from a
+    dropped connection, and ``ServiceErrorItem.retriable`` is derived from the
+    type -- so a vague type costs the caller its retry decision. A malformed JSON
+    body is terminal and must not look like a transient network fault.
+    """
+    if isinstance(exc, ValueError):  # body did not parse -- retrying won't help
+        return ServiceErrorItem(
+            type="invalid_response",
+            message="HN returned a response that could not be parsed",
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        error_type = (
+            "rate_limited" if code == 429
+            else "blocked" if code == 403
+            else "upstream_error" if code >= 500
+            else "request_failed"
+        )
+        return ServiceErrorItem(
+            type=error_type,
+            message=f"HN search failed with HTTP {code}",
+            details={"status_code": code},
+        )
+    return ServiceErrorItem(
+        type="request_failed", message="HN search failed", details={"reason": str(exc)}
+    )
 
 
 def _effective_request(request: HNRequest, window: ResolvedWindow) -> dict[str, Any]:

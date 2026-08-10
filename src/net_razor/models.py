@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 SourceName = Literal["x", "hn", "yt"]
 
@@ -16,12 +23,36 @@ _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
 # --------------------------------------------------------------------------- #
 # Serializable envelope pieces
 # --------------------------------------------------------------------------- #
+# Failures worth trying again: transient upstream conditions. Everything else --
+# a missing API key, a bad URL, an unusable call ID -- will fail identically on a
+# retry, and an agent that retries it just burns a request.
+_RETRIABLE_ERROR_TYPES = frozenset({
+    "rate_limited",
+    "timeout",
+    "blocked",
+    "request_failed",
+    "upstream_error",
+    "transcript_failed",
+})
+
+
 class ServiceErrorItem(BaseModel):
     """A handled error, safe to return to the caller and persist to the audit store."""
 
     type: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def retriable(self) -> bool:
+        """Whether trying the same call again could plausibly succeed.
+
+        Derived from ``type`` rather than set per call site, so the policy lives in
+        one place and every error carries it. The distinction already existed
+        inside the X backend's retry loop; it just never reached the caller.
+        """
+        return self.type in _RETRIABLE_ERROR_TYPES
 
 
 class EvidenceAuthor(BaseModel):
@@ -159,6 +190,10 @@ class YTTranscriptRequest(BaseModel):
     # Cap on returned transcript text; None -> YT_MAX_TRANSCRIPT_CHARS. 0 = no cap
     # (pass 0 to get the complete transcript of a video that was truncated in a digest).
     max_chars: int | None = Field(default=None, ge=0)
+    # Character offset into the full transcript. Pass the previous response's
+    # `next_offset` to read the following chunk; chunks are cut on segment
+    # boundaries, and offsets that land mid-chunk snap to the chunk containing them.
+    offset: int = Field(default=0, ge=0)
 
     @field_validator("url")
     @classmethod
@@ -177,6 +212,22 @@ class YTTranscriptRequest(BaseModel):
         if not languages:
             raise ValueError("languages must contain at least one value")
         return languages
+
+
+class YTMarkProcessedRequest(BaseModel):
+    """Successful transcript calls whose videos completed downstream processing."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    transcript_call_ids: list[str] = Field(min_length=1)
+
+    @field_validator("transcript_call_ids")
+    @classmethod
+    def _validate_call_ids(cls, value: list[str]) -> list[str]:
+        call_ids = [call_id.strip() for call_id in value]
+        if any(not call_id for call_id in call_ids):
+            raise ValueError("transcript call IDs must not be empty")
+        return list(dict.fromkeys(call_ids))
 
 
 class YTChannelDigestRequest(BaseModel):

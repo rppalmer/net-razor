@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
 
 from net_razor.audit.recorder import AuditRecorder
+from net_razor.audit.store import _SCHEMA_VERSION, AuditStore, AuditStoreSchemaError
 from net_razor.clock import FixedClock
 from net_razor.models import (
     EvidenceAuthor,
@@ -105,6 +107,51 @@ async def test_prune_deletes_old_calls_and_children(store):
 
 
 @pytest.mark.asyncio
+async def test_stored_transcript_reads_the_digest_nested_shape(store):
+    """The digest nests the transcript under "transcript"; lookup must find both."""
+    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
+    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
+        call.record(
+            effective_request={},
+            items=[],
+            raw={
+                "vid00000001": {
+                    "video_id": "vid00000001",
+                    "title": "from the feed",
+                    "transcript": {
+                        "language_code": "en",
+                        "segment_count": 1,
+                        "segments": [{"text": "hi", "start": 0.0, "duration": 1.0}],
+                    },
+                }
+            },
+            errors=[],
+        )
+
+    payload = store.stored_transcript("vid00000001")
+    assert payload is not None
+    assert payload["segments"][0]["text"] == "hi"
+
+
+def test_stored_transcript_returns_none_when_absent(store):
+    """A pruned or missing payload means a re-fetch, never an error."""
+    assert store.stored_transcript("nothing-here") is None
+
+
+@pytest.mark.asyncio
+async def test_stored_transcript_ignores_payloads_without_segments(store):
+    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
+    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
+        call.record(
+            effective_request={},
+            items=[],
+            raw={"vid00000002": {"video_id": "vid00000002", "transcript": None}},
+            errors=[],
+        )
+    assert store.stored_transcript("vid00000002") is None
+
+
+@pytest.mark.asyncio
 async def test_seen_source_ids_scoped_to_tool_and_source(store):
     recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
 
@@ -133,6 +180,63 @@ def test_stats_reports_counts_and_size(store):
     assert stats["database_bytes"] >= 0
 
 
+@pytest.mark.asyncio
+async def test_initialize_backfills_legacy_successful_transcripts(store):
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TABLE youtube_processed_videos")
+
+    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
+    item = EvidenceItem(
+        source="yt",
+        source_backend="yt-api",
+        source_id="legacy-video",
+        item_type="transcript",
+        canonical_url="https://www.youtube.com/watch?v=legacy-video",
+        text="transcript",
+        author=EvidenceAuthor(handle="channel", display_name="Channel"),
+        published_at=datetime(2026, 7, 1, tzinfo=UTC),
+        query_used="https://www.youtube.com/watch?v=legacy-video",
+    )
+    async with recorder.call(tool="yt_transcript", source="yt", request={}) as call:
+        call.record(effective_request={}, items=[item], raw={}, errors=[])
+
+    store.initialize()
+
+    assert store.processed_youtube_video_ids() == {"legacy-video"}
+
+
 def test_fetch_result_empty_helper():
     result = FetchResult.empty({"source": "hn"})
     assert result.items == [] and result.raw == {} and result.errors == []
+
+
+# --------------------------------------------------------------------------- #
+# schema version guard (T11)
+# --------------------------------------------------------------------------- #
+def test_initialize_stamps_the_schema_version(tmp_path):
+    store = AuditStore(tmp_path / "audit.db")
+    store.initialize()
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
+
+
+def test_an_existing_unstamped_database_is_adopted_not_rejected(tmp_path):
+    """Databases written before versioning existed are still readable."""
+    store = AuditStore(tmp_path / "audit.db")
+    store.initialize()
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("PRAGMA user_version = 0")  # pre-versioning state
+
+    AuditStore(tmp_path / "audit.db").initialize()  # must not raise
+    assert store.stats()["counts"]["calls"] == 0
+
+
+def test_a_future_schema_stops_startup_with_an_instruction(tmp_path):
+    """Better a clear failure at startup than 'no such column' mid-call."""
+    store = AuditStore(tmp_path / "audit.db")
+    store.initialize()
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("PRAGMA user_version = 999")
+
+    with pytest.raises(AuditStoreSchemaError, match="delete the database"):
+        AuditStore(tmp_path / "audit.db").initialize()

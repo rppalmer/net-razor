@@ -91,9 +91,7 @@ async def test_hn_client_sends_endpoint_and_numeric_filters():
         seen["numericFilters"] = request.url.params.get("numericFilters")
         return httpx.Response(200, json={"hits": []})
 
-    client = HttpHNClient(
-        "https://hn.algolia.com/api/v1", 10, transport=httpx.MockTransport(handler)
-    )
+    client = HttpHNClient(10, transport=httpx.MockTransport(handler))
     until_window = resolve_window(
         days=1, since=None, until=None, now=datetime(2026, 7, 6, tzinfo=UTC)
     )
@@ -101,3 +99,42 @@ async def test_hn_client_sends_endpoint_and_numeric_filters():
 
     assert seen["path"].endswith("/search_by_date")
     assert seen["numericFilters"].startswith(f"created_at_i>{int(until_window.since.timestamp())}")
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_type", "expected_retriable"),
+    [
+        (429, "rate_limited", True),
+        (403, "blocked", True),
+        (503, "upstream_error", True),
+        (400, "request_failed", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_http_failures_are_classified_and_carry_a_retry_hint(
+    status, expected_type, expected_retriable
+):
+    """A 429 must not look like a dropped connection — the caller acts on the type."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={})
+
+    source = HNSource(HttpHNClient(10, transport=httpx.MockTransport(handler)))
+    result = await source.fetch(HNRequest(query="agents"), WINDOW)
+
+    assert result.items == []
+    error = result.errors[0]
+    assert error.type == expected_type
+    assert error.model_dump()["retriable"] is expected_retriable
+    assert error.details["status_code"] == status
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_body_is_terminal_not_a_transient_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    source = HNSource(HttpHNClient(10, transport=httpx.MockTransport(handler)))
+    result = await source.fetch(HNRequest(query="agents"), WINDOW)
+
+    assert result.errors[0].type == "invalid_response"
+    assert result.errors[0].model_dump()["retriable"] is False  # retrying can't fix it

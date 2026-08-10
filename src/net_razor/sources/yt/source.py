@@ -13,9 +13,11 @@ from net_razor.models import (
     EvidenceItem,
     FetchResult,
     ServiceErrorItem,
+    TranscriptSegment,
     YTRequest,
     YTTranscriptRequest,
 )
+from net_razor.sources.yt.chunking import chunk_at, segments_in
 from net_razor.sources.yt.enrich import (
     TRANSCRIPT_ERROR_TYPES,
     candidate_to_item,
@@ -120,7 +122,11 @@ class YTSource:
 
 
 class YTTranscriptFetcher:
-    """Direct transcript fetch by URL/ID — no discovery, no time window."""
+    """Direct transcript fetch by URL/ID — no discovery, no time window.
+
+    Stays pure: it never reads the audit store. When a transcript has already been
+    stored, ``App`` passes it in as ``cached`` and no network call happens.
+    """
 
     def __init__(
         self, transcript_client: TranscriptClient, *, logger: logging.Logger | None = None
@@ -128,12 +134,19 @@ class YTTranscriptFetcher:
         self._client = transcript_client
         self._log = logger or logging.getLogger("net_razor.sources.yt.transcript")
 
-    async def transcript(self, request: YTTranscriptRequest, *, max_chars: int = 0) -> FetchResult:
+    async def transcript(
+        self,
+        request: YTTranscriptRequest,
+        *,
+        max_chars: int = 0,
+        cached: dict[str, Any] | None = None,
+    ) -> FetchResult:
         effective = {
             "url": request.url,
             "languages": request.languages,
             "include_segments": request.include_segments,
             "max_chars": max_chars,
+            "offset": request.offset,
         }
         try:
             video_id = extract_video_id(request.url)
@@ -142,30 +155,36 @@ class YTTranscriptFetcher:
                 effective, "", request.languages, "invalid_video_url", str(exc)
             )
 
-        try:
-            result = await asyncio.to_thread(self._client.fetch, video_id, request.languages)
-        except tuple(TRANSCRIPT_ERROR_TYPES) as exc:
-            error_type = TRANSCRIPT_ERROR_TYPES[type(exc)]
-            self._log.info("transcript_unavailable video_id=%s reason=%s", video_id, error_type)
-            return _transcript_error(
-                effective, video_id, request.languages, error_type, str(exc),
-            )
-        except Exception as exc:
-            self._log.warning(
-                "transcript_failed video_id=%s error=%s", video_id, type(exc).__name__
-            )
-            return _transcript_error(
-                effective, video_id, request.languages, "request_failed", str(exc)
-            )
+        if cached is not None:
+            segments = [TranscriptSegment(**segment) for segment in cached["segments"]]
+            language = cached.get("language")
+            language_code = cached.get("language_code")
+            is_generated = cached.get("is_generated")
+        else:
+            try:
+                result = await asyncio.to_thread(self._client.fetch, video_id, request.languages)
+            except tuple(TRANSCRIPT_ERROR_TYPES) as exc:
+                error_type = TRANSCRIPT_ERROR_TYPES[type(exc)]
+                self._log.info(
+                    "transcript_unavailable video_id=%s reason=%s", video_id, error_type
+                )
+                return _transcript_error(
+                    effective, video_id, request.languages, error_type, str(exc),
+                )
+            except Exception as exc:
+                self._log.warning(
+                    "transcript_failed video_id=%s error=%s", video_id, type(exc).__name__
+                )
+                return _transcript_error(
+                    effective, video_id, request.languages, "request_failed", str(exc)
+                )
+            segments = segments_from_result(result)
+            language = result.language
+            language_code = result.language_code
+            is_generated = result.is_generated
 
-        segments = segments_from_result(result)
-        full_text = "\n".join(segment.text for segment in segments)
-        text, truncated = cap_text(full_text, max_chars)
-        # Keep the returned segments consistent with the capped text so the whole
-        # response stays bounded (segments are opt-in, and only trimmed when truncated).
-        out_segments = segments
-        if truncated:
-            out_segments = _capped_segments(segments, max_chars)
+        chunk = chunk_at(segments, max_chars, request.offset)
+        out_segments = segments_in(segments, chunk)
         canonical_url = f"https://www.youtube.com/watch?v={video_id}"
         response = {
             "source": "yt",
@@ -173,13 +192,20 @@ class YTTranscriptFetcher:
             "video_id": video_id,
             "canonical_url": canonical_url,
             "language_preferences": request.languages,
-            "language": result.language,
-            "language_code": result.language_code,
-            "is_generated": result.is_generated,
+            "language": language,
+            "language_code": language_code,
+            "is_generated": is_generated,
             "segment_count": len(segments),
-            "text": text,
-            "truncated": truncated,
-            "full_char_count": len(full_text),
+            "text": chunk.text,
+            # True whenever this response is not the whole transcript.
+            "truncated": chunk.total > 1,
+            "full_char_count": chunk.full_char_count,
+            "offset": chunk.start,
+            # Pass this back as `offset` to read on; null means you have it all.
+            "next_offset": chunk.next_offset,
+            "part": min(chunk.index + 1, chunk.total),
+            "part_count": chunk.total,
+            "from_cache": cached is not None,
             "segments": (
                 [segment.model_dump(mode="json") for segment in out_segments]
                 if request.include_segments
@@ -194,27 +220,52 @@ class YTTranscriptFetcher:
             item_type="transcript",
             canonical_url=canonical_url,
             title=None,
-            text=text or "(empty transcript)",
+            text=chunk.text or "(empty transcript)",
             author=EvidenceAuthor(handle=video_id, display_name=video_id),
             # A direct transcript fetch carries no publish date; use a fixed
             # sentinel rather than the wall clock to keep the item deterministic.
             published_at=_NO_PUBLISH_DATE,
             query_used=request.url,
-            truncated=truncated,
+            truncated=chunk.total > 1,
         )
         self._log.info(
-            "transcript_fetched video_id=%s chars=%s full_chars=%s truncated=%s "
-            "segments=%s language=%s generated=%s",
-            video_id, len(text), len(full_text), truncated, len(segments),
-            result.language_code, result.is_generated,
+            "transcript_fetched video_id=%s part=%s/%s chars=%s full_chars=%s "
+            "segments=%s language=%s generated=%s cached=%s",
+            video_id, min(chunk.index + 1, chunk.total), chunk.total, len(chunk.text),
+            chunk.full_char_count, len(segments), language_code, is_generated,
+            cached is not None,
         )
         return FetchResult(
-            items=[item] if text else [],
-            raw={video_id: {"language_code": result.language_code, "segment_count": len(segments)}},
+            items=[item] if chunk.text else [],
+            # The complete transcript is stored once, on the fetch that retrieved it.
+            # Later pages read it back rather than storing another copy.
+            raw={video_id: _transcript_payload(segments, language, language_code, is_generated)}
+            if cached is None
+            else {},
             errors=[],
             effective_request=effective,
             meta={"response": response},
         )
+
+
+def _transcript_payload(
+    segments: list[TranscriptSegment],
+    language: str | None,
+    language_code: str | None,
+    is_generated: bool | None,
+) -> dict[str, Any]:
+    """The complete transcript, as stored in the audit trail.
+
+    This is what makes "complete for the audit" true on this path, and what later
+    pages and repeat fetches read back instead of hitting YouTube again.
+    """
+    return {
+        "language": language,
+        "language_code": language_code,
+        "is_generated": is_generated,
+        "segment_count": len(segments),
+        "segments": [segment.model_dump(mode="json") for segment in segments],
+    }
 
 
 def _transcript_error(
@@ -239,6 +290,11 @@ def _transcript_error(
         "text": None,
         "truncated": False,
         "full_char_count": 0,
+        "offset": 0,
+        "next_offset": None,
+        "part": 0,
+        "part_count": 0,
+        "from_cache": False,
         "segments": [],
         "errors": [error.model_dump(mode="json")],
     }
@@ -246,19 +302,5 @@ def _transcript_error(
         items=[], raw={}, errors=[error], effective_request=effective,
         meta={"response": response},
     )
-
-
-def _capped_segments(segments: list[Any], max_chars: int) -> list[Any]:
-    """The leading segments whose cumulative text fits within ``max_chars``."""
-    if max_chars <= 0:
-        return segments
-    kept: list[Any] = []
-    total = 0
-    for segment in segments:
-        total += len(segment.text) + 1  # +1 for the joining newline
-        if total > max_chars:
-            break
-        kept.append(segment)
-    return kept
 
 

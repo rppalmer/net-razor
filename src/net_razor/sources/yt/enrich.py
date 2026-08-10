@@ -72,6 +72,10 @@ async def _fetch_one(
             "language_code": result.language_code,
             "is_generated": result.is_generated,
             "segment_count": len(segments),
+            # The complete transcript, kept in the audit trail (never in the
+            # response) so a capped item can be re-read and paged later without
+            # going back to YouTube.
+            "segments": [segment.model_dump(mode="json") for segment in segments],
         }
         return text, meta
     except tuple(TRANSCRIPT_ERROR_TYPES) as exc:

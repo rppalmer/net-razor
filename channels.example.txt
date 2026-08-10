@@ -1,0 +1,17 @@
+# Net-Razor channel list. Copy to channels.txt and edit.
+#   cp channels.example.txt channels.txt
+#
+# One channel per line. Any of these forms works:
+#   UCxxxxxxxxxxxxxxxxxxxxxx        a bare channel ID (no lookup needed)
+#   @handle                         resolved to an ID on first use, then cached
+#   https://youtube.com/@handle     a channel URL
+#
+# Optional per-channel overrides after a pipe. They win over the tool's own
+# parameters, so `videos=1` means one video no matter what the caller asks for:
+#   @handle | videos=2 days=14      (aliases: n= and d=)
+#
+# '#' starts a comment anywhere on a line. No quoting rules, no escaping.
+
+# @channel1 | videos=1
+# @channel2 | videos=2 days=14
+# UCxxxxxxxxxxxxxxxxxxxxxx

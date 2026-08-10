@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from net_razor.app import App
+from net_razor.app import App, SourceEntry, _hn_leg, _x_leg, _yt_leg
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import FixedClock, ResolvedWindow
+from net_razor.config import Settings
 from net_razor.models import FetchResult
 
 FIXED_NOW = datetime(2026, 7, 6, 12, 0, 0, tzinfo=UTC)
@@ -50,13 +52,24 @@ def make_app(store, clock):
         settings=None,
     ) -> App:
         return App(
-            settings=settings or _StubSettings(),
+            settings=settings or stub_settings(database_path=store.database_path),
             clock=clock,
             store=store,
             recorder=AuditRecorder(store, clock),
-            x_source=x or RecordingSource("x", FetchResult.empty({})),
-            hn_source=hn or RecordingSource("hn", FetchResult.empty({})),
-            yt_source=yt or RecordingSource("yt", FetchResult.empty({})),
+            sources={
+                "x": SourceEntry(
+                    source=x or RecordingSource("x", FetchResult.empty({})),
+                    label="X", build_request=_x_leg,
+                ),
+                "hn": SourceEntry(
+                    source=hn or RecordingSource("hn", FetchResult.empty({})),
+                    label="HN", build_request=_hn_leg,
+                ),
+                "yt": SourceEntry(
+                    source=yt or RecordingSource("yt", FetchResult.empty({})),
+                    label="YT", build_request=_yt_leg,
+                ),
+            },
             yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
             yt_channel_digest_source=yt_digest or _StubDigest(),
             yt_discovery=yt_discovery or _StubDiscovery(),
@@ -91,20 +104,28 @@ class _StubDiscovery:
         return []
 
 
-class _StubSettings:
-    x_credentials_configured = False
-    youtube_search_configured = False
-    yt_search_mode = "broad"
-    youtube_channel_id_list: list[str] = []
-    youtube_channel_refs: list = []
-    hn_algolia_base_url = "https://hn.algolia.com/api/v1"
-    node_binary = "node"
-    youtube_api_key_value = None
-    proxy_url_value = None
-    yt_digest_only_new = False
-    yt_digest_require_transcript = False
-    yt_max_transcript_chars = 0
+def stub_settings(**overrides) -> Settings:
+    """A real ``Settings`` for tests, isolated from ``.env`` and the shell.
 
-    @property
-    def database_path(self):  # pragma: no cover - not used by these tests
-        raise NotImplementedError
+    Deliberately the production class rather than a duck-type: a hand-written
+    stand-in silently keeps passing when a field is added or renamed, so tests
+    can green-light a settings object the real code could never construct.
+
+    ``_env_file=None`` skips the repo's ``.env``, and the explicit values below
+    are init arguments, which outrank environment variables in pydantic-settings
+    -- so a stray ``AUTH_TOKEN`` in the shell can't change a test's outcome.
+    """
+    values: dict = {
+        "auth_token": None,
+        "ct0": None,
+        "youtube_api_key": None,
+        # Never the repo's real channels.txt -- tests must not depend on it.
+        "channels_file": Path("/nonexistent/channels.txt"),
+        "yt_proxy_url": None,
+        "yt_search_mode": "broad",
+        "yt_digest_only_new": False,
+        "yt_digest_require_transcript": False,
+        "yt_max_transcript_chars": 0,
+    }
+    values.update(overrides)
+    return Settings(_env_file=None, **values)

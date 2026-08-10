@@ -7,15 +7,21 @@ import pytest
 
 from net_razor.config import Settings
 from net_razor.errors import SourceError
-from net_razor.sources.x.bird_backend import BirdXSearchBackend
+from net_razor.sources.x.bird_backend import BirdXSearchBackend, XSearchTuning
 from net_razor.sources.x.subprocess_runner import run_json_subprocess
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(auth_token="tok", ct0="ct", x_search_retry_backoff_seconds=0,
-                x_search_max_attempts=3)
+    base = dict(auth_token="tok", ct0="ct")
     base.update(overrides)
-    return Settings(**base)
+    return Settings(_env_file=None, **base)
+
+
+def _tuning(**overrides) -> XSearchTuning:
+    # Retry/pacing numbers are code constants now; tests drop the waits to zero.
+    base = dict(retry_backoff_seconds=0, request_spacing_seconds=0, max_attempts=3)
+    base.update(overrides)
+    return XSearchTuning(**base)
 
 
 async def _no_sleep(_delay: float) -> None:
@@ -37,9 +43,9 @@ class _ScriptedRunner:
         return outcome
 
 
-def _backend(runner, **settings_overrides) -> BirdXSearchBackend:
-    backend = BirdXSearchBackend(_settings(**settings_overrides), process_runner=runner,
-                                 sleep=_no_sleep)
+def _backend(runner, *, settings=None, **tuning_overrides) -> BirdXSearchBackend:
+    backend = BirdXSearchBackend(settings or _settings(), tuning=_tuning(**tuning_overrides),
+                                 process_runner=runner, sleep=_no_sleep)
 
     async def _fake_node() -> str:
         return "node"
@@ -73,7 +79,7 @@ async def test_retryable_error_exhausts_attempts():
         {"ok": False, "error": {"type": "rate_limited", "retryable": True}},
     ])
     with pytest.raises(SourceError) as exc:
-        await _backend(runner, x_search_max_attempts=2).search("q", 5, "latest")
+        await _backend(runner, max_attempts=2).search("q", 5, "latest")
     assert exc.value.error_type == "rate_limited"
     assert exc.value.details["attempts"] == 2
     assert runner.calls == 2
@@ -107,7 +113,7 @@ async def test_ok_but_non_list_items_is_invalid_response():
 @pytest.mark.asyncio
 async def test_missing_credentials_raises_not_configured():
     runner = _ScriptedRunner([{"ok": True, "items": []}])
-    backend = _backend(runner, auth_token="", ct0="")
+    backend = _backend(runner, settings=_settings(auth_token="", ct0=""))
     with pytest.raises(SourceError) as exc:
         await backend.search("q", 5, "latest")
     assert exc.value.error_type == "not_configured"

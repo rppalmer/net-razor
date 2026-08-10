@@ -7,6 +7,8 @@
 
 # Local environment and secrets
 .env*
+channels.txt
+!channels.example.txt
 **/.env*
 !**/.env.example
 *.env

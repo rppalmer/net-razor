@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from net_razor.paths import find_repo_root
@@ -11,8 +11,12 @@ from net_razor.sources.yt.channel_ref import ChannelRef, parse_channel_refs
 
 _REPO_ROOT = find_repo_root(Path(__file__))
 
-# All configuration lives in a single root .env.
+# Secrets and toggles live in .env; the channel list lives in its own file.
+# Keeping the list out of .env removes a whole class of dotenv formatting traps:
+# a multi-line value had to be double-quoted or only its first line was read, and
+# a `#` comment inside the quotes silently swallowed an entry.
 _ENV_FILES = (_REPO_ROOT / ".env",)
+_CHANNELS_FILE = _REPO_ROOT / "channels.txt"
 
 
 class Settings(BaseSettings):
@@ -36,33 +40,13 @@ class Settings(BaseSettings):
     auth_token: SecretStr | None = None
     ct0: SecretStr | None = None
     node_binary: str = "node"
-    x_search_subprocess_timeout_seconds: float = Field(default=45, gt=0)
-    x_search_upstream_timeout_seconds: float = Field(default=20, gt=0)
-    x_search_max_attempts: int = Field(default=3, ge=1, le=5)
-    x_search_retry_backoff_seconds: float = Field(default=1, ge=0)
-    x_search_delay_seconds: float = Field(default=1, ge=0)
-
-    # HN
-    hn_algolia_base_url: str = Field(
-        default="https://hn.algolia.com/api/v1",
-        validation_alias=AliasChoices("HN_ALGOLIA_BASE_URL", "HN_API_BASE_URL"),
-    )
 
     # YouTube
-    youtube_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias=AliasChoices("YOUTUBE_API_KEY", "YT_API_KEY"),
-    )
-    youtube_api_base_url: str = "https://www.googleapis.com"
+    youtube_api_key: SecretStr | None = None
     yt_search_mode: str = Field(default="broad")
-    youtube_channel_ids: str = Field(
-        default="",
-        validation_alias=AliasChoices("YOUTUBE_CHANNEL_IDS", "YT_CHANNEL_IDS"),
-    )
-    yt_transcript_proxy_url: SecretStr | None = Field(
-        default=None,
-        validation_alias=AliasChoices("YT_TRANSCRIPT_PROXY_URL", "YT_PROXY_URL"),
-    )
+    # Channels come from channels.txt. Point this elsewhere only if you need to.
+    channels_file: Path = _CHANNELS_FILE
+    yt_proxy_url: SecretStr | None = None
     # Default for the channel digest's cross-run dedup when a call doesn't set only_new.
     yt_digest_only_new: bool = False
     # Default for skipping videos without a fetchable transcript (e.g. captions disabled).
@@ -87,11 +71,22 @@ class Settings(BaseSettings):
             return None
         return value if value.is_absolute() else _REPO_ROOT / value
 
+    @field_validator("channels_file")
+    @classmethod
+    def _resolve_channels_file(cls, value: Path) -> Path:
+        return value if value.is_absolute() else _REPO_ROOT / value
+
     @field_validator("yt_search_mode")
     @classmethod
     def _validate_search_mode(cls, value: str) -> str:
-        value = value.strip().lower()
-        return value if value in {"broad", "channels"} else "broad"
+        # Fail loudly: silently falling back to "broad" on a typo meant a
+        # channel-restricted search quietly returned all of YouTube instead.
+        mode = value.strip().lower()
+        if mode not in {"broad", "channels"}:
+            raise ValueError(
+                f"YT_SEARCH_MODE must be 'broad' or 'channels', got {value!r}"
+            )
+        return mode
 
     # -- derived accessors ---------------------------------------------------
     @staticmethod
@@ -119,17 +114,23 @@ class Settings(BaseSettings):
 
     @property
     def proxy_url_value(self) -> str | None:
-        return self._secret(self.yt_transcript_proxy_url)
-
-    @property
-    def youtube_channel_id_list(self) -> list[str]:
-        raw = self.youtube_channel_ids.replace("\n", ",")
-        return [channel.strip() for channel in raw.split(",") if channel.strip()]
+        return self._secret(self.yt_proxy_url)
 
     @property
     def youtube_channel_refs(self) -> list[ChannelRef]:
-        """Configured channels parsed into refs (IDs, @handles, or URLs)."""
-        return parse_channel_refs(self.youtube_channel_ids)
+        """Channels from ``channels.txt`` — one per line, ``#`` comments allowed.
+
+        Missing file means no configured channels, which the tools report as a
+        clear caveat rather than an error.
+        """
+        if not self.channels_file.is_file():
+            return []
+        lines = []
+        for raw_line in self.channels_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].strip()  # strip whole-line and trailing comments
+            if line:
+                lines.append(line)
+        return parse_channel_refs("\n".join(lines))
 
     @property
     def youtube_search_configured(self) -> bool:

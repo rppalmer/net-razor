@@ -12,7 +12,6 @@ from net_razor.sources.yt.search_client import (
     HttpYouTubeSearchClient,
     YouTubeSearchError,
     _parse_search_candidates,
-    _rank_candidates,
 )
 
 WINDOW = resolve_window(days=2, since=None, until=None, now=datetime(2026, 7, 6, tzinfo=UTC))
@@ -21,8 +20,7 @@ _UC = "UC" + "a" * 22
 
 def _client(handler) -> HttpYouTubeSearchClient:
     return HttpYouTubeSearchClient(
-        api_key="k", base_url="https://www.googleapis.com", timeout_seconds=10,
-        transport=httpx.MockTransport(handler),
+        api_key="k", timeout_seconds=10, transport=httpx.MockTransport(handler),
     )
 
 
@@ -38,16 +36,6 @@ def test_parse_candidates_skips_incomplete_items():
     }
     candidates = _parse_search_candidates(payload)
     assert [c.video_id for c in candidates] == ["vid00000001"]
-
-
-def test_rank_prefers_term_hits_then_views():
-    now = datetime(2026, 7, 5, tzinfo=UTC)
-    from net_razor.sources.yt.search_client import YouTubeVideoCandidate
-
-    a = YouTubeVideoCandidate("a", "python agents", "", "c", "c", now, view_count=1)
-    b = YouTubeVideoCandidate("b", "unrelated", "", "c", "c", now, view_count=9999)
-    ranked = _rank_candidates([b, a], "python agents")
-    assert ranked[0].video_id == "a"  # term hits beat raw view count
 
 
 @pytest.mark.asyncio
@@ -69,8 +57,7 @@ async def test_broad_search_enriches_and_sends_published_after():
         ]})
 
     client = HttpYouTubeSearchClient(
-        api_key="k", base_url="https://www.googleapis.com", timeout_seconds=10,
-        transport=httpx.MockTransport(handler),
+        api_key="k", timeout_seconds=10, transport=httpx.MockTransport(handler),
     )
     candidates = await client.search(YTRequest(query="python agents"), WINDOW)
     assert len(candidates) == 1
@@ -118,38 +105,45 @@ async def test_resolve_channels_caches_repeated_lookups():
 
 
 @pytest.mark.asyncio
-async def test_search_channel_returns_recent_enriched_videos():
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/search"):
-            assert request.url.params.get("channelId") == _UC
-            assert request.url.params.get("order") == "date"
-            return httpx.Response(200, json={"items": [
-                {"id": {"videoId": "vidoldddddd"},
-                 "snippet": {"title": "old", "publishedAt": "2026-07-04T00:00:00Z",
-                             "channelId": _UC, "channelTitle": "Chan"}},
-                {"id": {"videoId": "vidnewwwwww"},
-                 "snippet": {"title": "new", "publishedAt": "2026-07-05T00:00:00Z",
-                             "channelId": _UC, "channelTitle": "Chan"}},
-            ]})
-        return httpx.Response(200, json={"items": [
-            {"id": "vidnewwwwww", "statistics": {"viewCount": "7"}},
-        ]})
-
-    client = _client(handler)
-    videos = await client.search_channel(_UC, WINDOW, max_results=5)
-    assert [v.video_id for v in videos] == ["vidnewwwwww", "vidoldddddd"]  # newest first
-    assert videos[0].view_count == 7
-
-
-@pytest.mark.asyncio
 async def test_search_raises_on_upstream_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"error": {"message": "quota exceeded"}})
 
     client = HttpYouTubeSearchClient(
-        api_key="k", base_url="https://www.googleapis.com", timeout_seconds=10,
-        transport=httpx.MockTransport(handler),
+        api_key="k", timeout_seconds=10, transport=httpx.MockTransport(handler),
     )
     with pytest.raises(YouTubeSearchError) as exc:
         await client.search(YTRequest(query="agents"), WINDOW)
     assert exc.value.details["status_code"] == 403
+
+
+@pytest.mark.asyncio
+async def test_broad_search_preserves_the_api_ordering():
+    """order= must reach the caller intact.
+
+    Client-side re-ranking used to re-sort by term hits and view count *after* the
+    API had already applied `order`, so order="date" silently came back ranked by
+    popularity. The API's order is now what you get.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/search"):
+            assert request.url.params.get("order") == "date"
+            return httpx.Response(200, json={"items": [
+                # returned newest-first by the API; "unrelated" has far more views
+                # and would have been hoisted to the top by the old ranking step
+                {"id": {"videoId": "vidnewwwwww"},
+                 "snippet": {"title": "unrelated", "publishedAt": "2026-07-05T00:00:00Z",
+                             "channelId": "c", "channelTitle": "Chan"}},
+                {"id": {"videoId": "vidoldddddd"},
+                 "snippet": {"title": "python agents", "publishedAt": "2026-07-04T00:00:00Z",
+                             "channelId": "c", "channelTitle": "Chan"}},
+            ]})
+        return httpx.Response(200, json={"items": [
+            {"id": "vidnewwwwww", "statistics": {"viewCount": "1"}},
+            {"id": "vidoldddddd", "statistics": {"viewCount": "999999"}},
+        ]})
+
+    videos = await _client(handler).search(
+        YTRequest(query="python agents", order="date"), WINDOW
+    )
+    assert [v.video_id for v in videos] == ["vidnewwwwww", "vidoldddddd"]

@@ -6,15 +6,7 @@ import json
 from typing import Any
 
 from net_razor.app import create_app
-from net_razor.models import (
-    HNRequest,
-    ResearchRequest,
-    XRequest,
-    YTChannelDigestRequest,
-    YTNewVideosRequest,
-    YTRequest,
-    YTTranscriptRequest,
-)
+from net_razor.models import XRequest, YTTranscriptRequest
 
 
 def _csv_values(value: str) -> list[str]:
@@ -31,22 +23,15 @@ def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False))
 
 
-def _add_search_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("query")
-    parser.add_argument("--max-results", type=int, default=10)
-    parser.add_argument("--days", type=int, default=1)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Net-Razor local fetch CLI.")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Net-Razor operational CLI. The search tools are MCP-only; these are the "
+                    "commands a person needs when the agent can't help — diagnosing a server "
+                    "that won't start, inspecting past calls, pruning, and credential checks.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    research = subparsers.add_parser("research", help="Fan out to multiple sources.")
-    research.add_argument("topic")
-    research.add_argument("--days", type=int, default=1)
-    research.add_argument("--sources", default="x,hn")
-    research.add_argument("--max-results-per-source", type=int, default=10)
-
+    # -- operational --------------------------------------------------------
     subparsers.add_parser("doctor", help="Check local Net-Razor setup.")
 
     runs = subparsers.add_parser("runs", help="List recent audited calls.")
@@ -58,65 +43,19 @@ def parse_args() -> argparse.Namespace:
     prune = subparsers.add_parser("prune", help="Delete audited calls older than a date.")
     prune.add_argument("--before", required=True, help="Delete calls created before YYYY-MM-DD.")
 
-    x_search = subparsers.add_parser("x-search", help="Search X.")
-    _add_search_args(x_search)
+    # -- manual checks ------------------------------------------------------
+    x_search = subparsers.add_parser(
+        "x-search", help="Search X. Mainly a check that the session cookies still work."
+    )
+    x_search.add_argument("query")
+    x_search.add_argument("--max-results", type=int, default=10)
+    x_search.add_argument("--days", type=int, default=1)
     x_search.add_argument("--mode", choices=["latest", "top"], default="latest")
 
-    hn_search = subparsers.add_parser("hn-search", help="Search Hacker News.")
-    _add_search_args(hn_search)
-    hn_search.add_argument("--sort", choices=["latest", "relevance"], default="latest")
-
-    yt_search = subparsers.add_parser("yt-search", help="Search YouTube.")
-    _add_search_args(yt_search)
-    yt_search.add_argument("--transcript-limit", type=int, default=3)
-    yt_search.add_argument(
-        "--fetch-transcripts", action=argparse.BooleanOptionalAction, default=True
+    yt_transcript = subparsers.add_parser(
+        "yt-transcript",
+        help="Fetch one YouTube transcript. Also a check that the proxy works.",
     )
-
-    yt_new = subparsers.add_parser(
-        "yt-new-videos", help="List recent videos across channels (queue, no transcripts)."
-    )
-    yt_new.add_argument("--days", type=int, default=7)
-    yt_new.add_argument("--videos-per-channel", type=int, default=10)
-    yt_new.add_argument(
-        "--channels", default="",
-        help="Override configured channels (comma-separated IDs, @handles, or URLs).",
-    )
-    yt_new.add_argument(
-        "--include-processed", action="store_true",
-        help="Include videos already transcribed (default: only not-yet-processed).",
-    )
-
-    yt_digest = subparsers.add_parser(
-        "yt-channel-digest", help="Per-channel YouTube digest (latest videos + transcripts)."
-    )
-    yt_digest.add_argument("--days", type=int, default=7)
-    yt_digest.add_argument("--videos-per-channel", type=int, default=5)
-    yt_digest.add_argument("--transcript-limit-per-channel", type=int, default=2)
-    yt_digest.add_argument(
-        "--fetch-transcripts", action=argparse.BooleanOptionalAction, default=True
-    )
-    yt_digest.add_argument(
-        "--channels", default="",
-        help="Override configured channels (comma-separated IDs, @handles, or URLs).",
-    )
-    yt_digest.add_argument(
-        "--only-new", action=argparse.BooleanOptionalAction, default=None,
-        help="Skip videos already returned by a prior digest (dedup across runs). "
-             "Defaults to YT_DIGEST_ONLY_NEW when omitted.",
-    )
-    yt_digest.add_argument(
-        "--require-transcript", action=argparse.BooleanOptionalAction, default=None,
-        help="Skip videos with no fetchable transcript (e.g. captions disabled). "
-             "Defaults to YT_DIGEST_REQUIRE_TRANSCRIPT when omitted.",
-    )
-    yt_digest.add_argument(
-        "--max-transcript-chars", type=int, default=None,
-        help="Cap each transcript's characters (0 = no cap). "
-             "Defaults to YT_MAX_TRANSCRIPT_CHARS when omitted.",
-    )
-
-    yt_transcript = subparsers.add_parser("yt-transcript", help="Fetch one YouTube transcript.")
     yt_transcript.add_argument("url")
     yt_transcript.add_argument("--languages", default="en")
     yt_transcript.add_argument(
@@ -124,116 +63,56 @@ def parse_args() -> argparse.Namespace:
     )
     yt_transcript.add_argument(
         "--max-chars", type=int, default=None,
-        help="Cap transcript characters (0 = full). Defaults to YT_MAX_TRANSCRIPT_CHARS.",
+        help="Characters per part (0 = whole transcript). Defaults to YT_MAX_TRANSCRIPT_CHARS.",
+    )
+    yt_transcript.add_argument(
+        "--offset", type=int, default=0,
+        help="Character offset to read from. Pass the previous response's next_offset "
+             "to read the following part.",
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-async def run_command(args: argparse.Namespace) -> int:
-    app = create_app()
-
-    if args.command == "research":
-        _print_json(
-            await app.research(
-                ResearchRequest(
-                    topic=args.topic,
-                    days=args.days,
-                    sources=_csv_values(args.sources),
-                    max_results_per_source=args.max_results_per_source,
-                )
-            )
-        )
-        return 0
-
-    if args.command == "runs":
-        _print_json(app.runs(limit=args.limit))
-        return 0
-
-    if args.command == "prune":
-        _print_json(app.prune(before=_iso_midnight(args.before)))
-        return 0
+async def run_command(args: argparse.Namespace, app: Any | None = None) -> int:
+    resolved_app = app or create_app()
 
     if args.command == "doctor":
-        result = app.doctor()
+        result = resolved_app.doctor()
         _print_json(result)
         return 0 if result["ok"] else 1
 
+    if args.command == "runs":
+        _print_json(resolved_app.runs(limit=args.limit))
+        return 0
+
     if args.command == "run":
-        result = app.run_detail(args.call_id)
+        result = resolved_app.run_detail(args.call_id)
         _print_json(result)
         return 1 if "error" in result else 0
 
+    if args.command == "prune":
+        _print_json(resolved_app.prune(before=_iso_midnight(args.before)))
+        return 0
+
     if args.command == "x-search":
         _print_json(
-            await app.x_search(
+            await resolved_app.x_search(
                 XRequest(query=args.query, max_results=args.max_results,
                          days=args.days, mode=args.mode)
             )
         )
         return 0
 
-    if args.command == "hn-search":
-        _print_json(
-            await app.hn_search(
-                HNRequest(query=args.query, max_results=args.max_results,
-                          days=args.days, sort=args.sort)
-            )
-        )
-        return 0
-
-    if args.command == "yt-search":
-        _print_json(
-            await app.yt_search(
-                YTRequest(
-                    query=args.query,
-                    max_results=args.max_results,
-                    days=args.days,
-                    transcript_limit=args.transcript_limit,
-                    fetch_transcripts=args.fetch_transcripts,
-                )
-            )
-        )
-        return 0
-
-    if args.command == "yt-new-videos":
-        _print_json(
-            await app.yt_new_videos(
-                YTNewVideosRequest(
-                    days=args.days,
-                    videos_per_channel=args.videos_per_channel,
-                    channels=_csv_values(args.channels),
-                    include_processed=args.include_processed,
-                )
-            )
-        )
-        return 0
-
-    if args.command == "yt-channel-digest":
-        _print_json(
-            await app.yt_channel_digest(
-                YTChannelDigestRequest(
-                    days=args.days,
-                    videos_per_channel=args.videos_per_channel,
-                    transcript_limit_per_channel=args.transcript_limit_per_channel,
-                    fetch_transcripts=args.fetch_transcripts,
-                    channels=_csv_values(args.channels),
-                    only_new=args.only_new,
-                    require_transcript=args.require_transcript,
-                    max_transcript_chars=args.max_transcript_chars,
-                )
-            )
-        )
-        return 0
-
     if args.command == "yt-transcript":
         _print_json(
-            await app.yt_transcript(
+            await resolved_app.yt_transcript(
                 YTTranscriptRequest(
                     url=args.url,
                     languages=_csv_values(args.languages),
                     include_segments=args.include_segments,
                     max_chars=args.max_chars,
+                    offset=args.offset,
                 )
             )
         )

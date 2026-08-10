@@ -161,15 +161,30 @@ def _parse_feed(xml_text: str) -> list[YouTubeVideoCandidate]:
         )
         group = entry.find(f"{_MEDIA}group")
         description = (group.findtext(f"{_MEDIA}description") if group is not None else "") or ""
+        channel_id = entry.findtext(f"{_YT}channelId") or ""
+        view_count = _feed_views(group)
         candidates.append(
             YouTubeVideoCandidate(
                 video_id=video_id,
                 title=title,
                 description=description,
                 channel_title=channel_title,
-                channel_id=entry.findtext(f"{_YT}channelId") or "",
+                channel_id=channel_id,
                 published_at=_parse_datetime(published),
-                view_count=_feed_views(group),
+                view_count=view_count,
+                # What the feed carried, for the audit trail. The XML itself isn't
+                # kept -- these are every field the parser reads from an entry.
+                raw={
+                    "feed_title": feed_title,
+                    "video_id": video_id,
+                    "title": title,
+                    "description": description,
+                    "channel_title": channel_title,
+                    "channel_id": channel_id,
+                    "published": published,
+                    "updated": entry.findtext(f"{_ATOM}updated"),
+                    "view_count": view_count,
+                },
             )
         )
     return candidates

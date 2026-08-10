@@ -53,3 +53,26 @@ def test_yt_request_caps_transcript_limit():
 def test_research_request_dedupes_sources():
     request = ResearchRequest(topic="agents", sources=["x", "x", "hn"])
     assert request.sources == ["x", "hn"]
+
+
+# --------------------------------------------------------------------------- #
+# error retry hints (T20)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("error_type", "retriable"),
+    [
+        ("rate_limited", True),      # wait and try again
+        ("timeout", True),
+        ("upstream_error", True),
+        ("not_configured", False),   # will fail identically forever
+        ("configuration_missing", False),
+        ("invalid_video_url", False),
+        ("transcripts_disabled", False),
+        ("invalid_transcript_call_id", False),
+    ],
+)
+def test_errors_tell_the_caller_whether_a_retry_could_help(error_type, retriable):
+    from net_razor.models import ServiceErrorItem
+
+    error = ServiceErrorItem(type=error_type, message="x")
+    assert error.model_dump()["retriable"] is retriable

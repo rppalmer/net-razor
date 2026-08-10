@@ -7,7 +7,6 @@ import httpx
 
 from net_razor.clock import ResolvedWindow
 from net_razor.models import EvidenceItem, FetchResult, ServiceErrorItem, YTChannelLeg
-from net_razor.sources.yt.channel_ref import ChannelRef, ResolvedChannel
 from net_razor.sources.yt.enrich import candidate_to_item, cap_text, fetch_transcripts
 from net_razor.sources.yt.rss_client import YouTubeRssClient, YouTubeRssError
 
@@ -33,11 +32,6 @@ class YTChannelDigest:
         self._discovery = discovery
         self._transcript_client = transcript_client
         self._log = logger or logging.getLogger("net_razor.sources.yt.digest")
-
-    async def resolve_channels(
-        self, refs: list[ChannelRef]
-    ) -> tuple[list[ResolvedChannel], list[str]]:
-        return await self._discovery.resolve_channels(refs)
 
     async def fetch(self, leg: YTChannelLeg, window: ResolvedWindow) -> FetchResult:
         effective = {
@@ -100,6 +94,9 @@ class YTChannelDigest:
             transcript_text = transcript[0] if transcript else None
             transcript_meta = transcript[1] if transcript else None
             raw[candidate.video_id] = {
+                # The feed entry as parsed, plus the full transcript, so the audit
+                # trail holds what upstream actually returned rather than a stub.
+                **candidate.raw,
                 "video_id": candidate.video_id,
                 "transcript": transcript_meta,
             }

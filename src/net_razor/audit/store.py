@@ -8,6 +8,22 @@ from uuid import uuid4
 
 from net_razor.models import EvidenceItem, ServiceErrorItem
 
+# Bump when a schema change cannot be applied by CREATE TABLE / INDEX IF NOT
+# EXISTS -- a new column, a changed type, a dropped table -- and remove the older
+# numbers from _READABLE_VERSIONS below.
+_SCHEMA_VERSION = 1
+
+# Versions this code can open as-is. Anything outside this set stops the server at
+# startup with an instruction, rather than failing later on a missing column in
+# the middle of a call. The audit database is expendable by design, so "delete it
+# and restart" is a real answer here; a migration script would be more machinery
+# than the data is worth.
+_READABLE_VERSIONS = frozenset({0, _SCHEMA_VERSION})
+
+
+class AuditStoreSchemaError(RuntimeError):
+    """The database on disk was written by a different version of the schema."""
+
 
 def _dump(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
@@ -33,6 +49,11 @@ class AuditStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
+            self._check_schema_version(connection)
+            processed_table_exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'youtube_processed_videos'"
+            ).fetchone()
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS calls (
@@ -80,12 +101,64 @@ class AuditStore:
                     FOREIGN KEY(call_id) REFERENCES calls(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS youtube_processed_videos (
+                    video_id TEXT PRIMARY KEY,
+                    transcript_call_id TEXT NOT NULL,
+                    acknowledgement_call_id TEXT NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_calls_parent ON calls(parent_id);
                 CREATE INDEX IF NOT EXISTS idx_items_call ON items(call_id);
                 CREATE INDEX IF NOT EXISTS idx_raw_call ON raw(call_id);
                 CREATE INDEX IF NOT EXISTS idx_errors_call ON errors(call_id);
+                CREATE INDEX IF NOT EXISTS idx_raw_source ON raw(source, source_id);
+                -- seen_source_ids() filters calls by tool on every only_new digest,
+                -- and that scan grows with history.
+                CREATE INDEX IF NOT EXISTS idx_calls_tool ON calls(tool);
                 """
             )
+            if processed_table_exists is None:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO youtube_processed_videos (
+                        video_id,
+                        transcript_call_id,
+                        acknowledgement_call_id,
+                        processed_at
+                    )
+                    SELECT
+                        i.source_id,
+                        c.id,
+                        c.id,
+                        COALESCE(c.finished_at, c.created_at)
+                    FROM items i
+                    JOIN calls c ON c.id = i.call_id
+                    WHERE c.tool = 'yt_transcript'
+                      AND c.source = 'yt'
+                      AND c.status = 'ok'
+                      AND i.source = 'yt'
+                    """
+                )
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _check_schema_version(connection: sqlite3.Connection) -> None:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version in _READABLE_VERSIONS:
+            return
+        newer = version > _SCHEMA_VERSION
+        reason = (
+            "was written by a newer version of Net-Razor"
+            if newer
+            else "uses a schema this version can no longer read"
+        )
+        raise AuditStoreSchemaError(
+            f"The audit database {reason} "
+            f"(found schema version {version}, this build expects {_SCHEMA_VERSION}). "
+            "The audit trail is a record, not application state -- delete the database "
+            "file and restart to continue with a fresh one."
+        )
 
     # -- writes --------------------------------------------------------------
     def open_call(
@@ -225,8 +298,9 @@ class AuditStore:
         return {"counts": counts, "database_bytes": size}
 
     # -- reads ---------------------------------------------------------------
-    def list_calls(self, *, limit: int = 50, top_level_only: bool = True) -> list[dict[str, Any]]:
-        clause = "WHERE parent_id IS NULL" if top_level_only else ""
+    def list_calls(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        # Top-level only: fan-out legs are reachable through their parent.
+        clause = "WHERE parent_id IS NULL"
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
@@ -252,6 +326,153 @@ class AuditStore:
                 (tool, source),
             ).fetchall()
         return {row["source_id"] for row in rows}
+
+    def stored_transcript(self, video_id: str) -> dict[str, Any] | None:
+        """The most recent stored transcript payload for a video, if any.
+
+        Lets a repeat or paged ``yt_transcript`` call read text Net-Razor already
+        fetched instead of going back to YouTube. Returns ``None`` whenever the
+        payload isn't there -- a pruned or deleted database simply means a
+        re-fetch, never an error.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT raw_json FROM raw
+                WHERE source = 'yt' AND source_id = ?
+                ORDER BY created_at DESC
+                """,
+                (video_id,),
+            ).fetchall()
+        for row in rows:
+            payload = _load(row["raw_json"])
+            if not isinstance(payload, dict):
+                continue
+            # yt_transcript stores the transcript at the top level; the digest and
+            # yt_search nest it under "transcript" alongside the discovery payload.
+            if payload.get("segments"):
+                return payload
+            nested = payload.get("transcript")
+            if isinstance(nested, dict) and nested.get("segments"):
+                return nested
+        return None
+
+    def processed_youtube_video_ids(self) -> set[str]:
+        """Return video IDs explicitly acknowledged as fully processed."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT video_id FROM youtube_processed_videos"
+            ).fetchall()
+        return {row["video_id"] for row in rows}
+
+    def acknowledge_youtube_transcripts(
+        self,
+        *,
+        transcript_call_ids: list[str],
+        acknowledgement_call_id: str,
+        processed_at: str,
+    ) -> dict[str, list[str]]:
+        """Acknowledge the transcript calls that check out, and report the rest.
+
+        Partial success on purpose: one stale ID in a batch of ten used to discard
+        all ten, forcing the caller to re-summarize nine videos it had already
+        finished -- exactly the waste the incremental flow exists to prevent.
+        Unusable IDs come back in ``invalid_call_ids`` for the caller to act on.
+        """
+        unique_call_ids = list(dict.fromkeys(transcript_call_ids))
+        if not unique_call_ids:
+            return {
+                "acknowledged_video_ids": [],
+                "already_acknowledged_video_ids": [],
+                "invalid_call_ids": [],
+            }
+        placeholders = ",".join("?" for _ in unique_call_ids)
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.id AS call_id, i.source_id, i.item_json
+                FROM calls c
+                JOIN items i ON i.call_id = c.id
+                WHERE c.id IN ({placeholders})
+                  AND c.tool = 'yt_transcript'
+                  AND c.source = 'yt'
+                  AND c.status = 'ok'
+                  AND i.source = 'yt'
+                """,
+                unique_call_ids,
+            ).fetchall()
+            video_id_by_call_id = {
+                row["call_id"]: row["source_id"]
+                for row in rows
+                if _load(row["item_json"]).get("item_type") == "transcript"
+            }
+            invalid_call_ids = [
+                call_id
+                for call_id in unique_call_ids
+                if call_id not in video_id_by_call_id
+            ]
+            if not video_id_by_call_id:
+                return {
+                    "acknowledged_video_ids": [],
+                    "already_acknowledged_video_ids": [],
+                    "invalid_call_ids": invalid_call_ids,
+                }
+
+            # Only the IDs that resolved -- the caller's order is preserved so the
+            # response reads back in the order the videos were submitted.
+            ordered_video_ids = list(
+                dict.fromkeys(
+                    video_id_by_call_id[call_id]
+                    for call_id in unique_call_ids
+                    if call_id in video_id_by_call_id
+                )
+            )
+            video_placeholders = ",".join("?" for _ in ordered_video_ids)
+            existing_rows = connection.execute(
+                "SELECT video_id FROM youtube_processed_videos "
+                f"WHERE video_id IN ({video_placeholders})",
+                ordered_video_ids,
+            ).fetchall()
+            already_acknowledged = {row["video_id"] for row in existing_rows}
+            newly_acknowledged = [
+                video_id
+                for video_id in ordered_video_ids
+                if video_id not in already_acknowledged
+            ]
+            transcript_call_id_by_video_id = {
+                video_id: call_id
+                for call_id, video_id in video_id_by_call_id.items()
+            }
+            connection.executemany(
+                """
+                INSERT INTO youtube_processed_videos (
+                    video_id,
+                    transcript_call_id,
+                    acknowledgement_call_id,
+                    processed_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        video_id,
+                        transcript_call_id_by_video_id[video_id],
+                        acknowledgement_call_id,
+                        processed_at,
+                    )
+                    for video_id in newly_acknowledged
+                ],
+            )
+
+        return {
+            "acknowledged_video_ids": newly_acknowledged,
+            "already_acknowledged_video_ids": [
+                video_id
+                for video_id in ordered_video_ids
+                if video_id in already_acknowledged
+            ],
+            "invalid_call_ids": invalid_call_ids,
+        }
 
     def get_call(self, call_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
