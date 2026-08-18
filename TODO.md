@@ -471,6 +471,15 @@ cached (verified against a scratch database).
 full download, and Whisper ignores the video track anyway. Then a local Whisper
 implementation.
 
+> **This no longer works, tested 2026-08-18.** Four videos, every audio format,
+> five player clients: HTTP 403 on every media fetch, with yt-dlp current.
+> YouTube requires a proof-of-origin token only a real browser produces, the
+> media URL carries a scrambled parameter needing YouTube's own JavaScript to
+> unscramble, and some formats are moving to a streaming model that exposes no
+> file URL at all. The workarounds are executing internet-fetched JavaScript at
+> runtime, or authenticating with the operator's Google account. Do not re-attempt
+> this without reading R5, which moved the whole idea to podcast audio instead.
+
 **It cannot be a synchronous tool — with one caveat found later.** A 40-minute
 video is realistically 4–10 minutes of CPU, and a generic MCP host gives up
 around 60 seconds. But the only consumer is ORIS, which launches this server
@@ -562,30 +571,38 @@ The costs are accepted knowingly: a schema hop at the boundary, and a dependency
 on the launching host's environment — which is why `NODE_BINARY` sometimes needs
 an absolute path.
 
-### R5 · Podcasts — **considered and dropped**
+### R5 · Podcasts with local Whisper — **designed, not built**
 
-Dropped 2026-08-18, before any code. The idea was a dedicated podcast source
-(`podcasts.txt` of RSS feeds, plus new-episodes / transcript / mark-processed
-tools) to get transcripts more reliably than YouTube provides them.
+Dropped on 2026-08-18 and revived the same day with a different design, because
+the reason for dropping it stopped being true within hours.
 
-Three reasons it went:
+**Why it came back.** It was dropped partly because it needed a paid third party
+(Taddy) for transcripts. Then R1's Whisper work hit a wall: YouTube audio can no
+longer be downloaded at all. Four videos, every format, five player clients, HTTP
+403 on every media fetch, with yt-dlp current. The workarounds are executing
+JavaScript fetched from the internet at runtime — the inverse of this project's
+trust rule — or authenticating downloads with the operator's Google account.
 
-**The premise did not survive R1's measurement.** Podcasts were meant to fix an
-inconsistency in YouTube transcripts. That inconsistency was then measured at
-four failures in the entire audit history. There is no problem here to solve.
+Podcast RSS has none of that. Ten feeds checked, ten expose a plain audio URL; a
+62-minute episode downloaded in 1.1 seconds unauthenticated. And with local
+Whisper the Taddy dependency disappears, because we need the audio rather than
+somebody else's transcript.
 
-**It needed a paid third party.** The design was "try the publisher's
-`<podcast:transcript>` tag first, fall back to Taddy." Adoption of that tag is
-thin, so in practice Taddy would not have been a fallback — it would have been
-the implementation. A per-episode dependency on an external paid service does
-not belong in a tool whose point is running locally against providers directly.
+**Measured, on an M3 Pro.** Transcription runs at about 22x realtime — a
+62-minute episode in 168 seconds — at 1.4% word error against that show's own
+published transcript, using `mlx-whisper` with `large-v3-turbo`. Peak memory 4.1
+GiB, model 1.5 GB on disk, roughly 4 seconds of process startup. Three of ten
+feeds publish their own transcript, so Whisper is the normal path rather than a
+fallback.
 
-**Most podcasts publish to YouTube anyway**, where the existing channel flow
-already handles them.
+**Full design:** `docs/superpowers/specs/2026-08-18-podcast-source-design.md`.
+It covers the two tools, the storage decision, why Whisper runs as a subprocess
+that exits, why the call blocks rather than queues, and the two storage details
+in the YouTube path that will silently break this if copied carelessly.
 
-**What this costs, accepted knowingly.** Publisher transcripts often carry
-speaker labels and YouTube auto-captions do not, so attributing a claim to a
-named person now rests on the consuming agent inferring it. And a show that
-posts only clips to YouTube while keeping full episodes audio-only is a show
-Net-Razor sees partially or not at all. Revisit only if either of those turns
-into an actual complaint about a digest.
+**Blocked on the operator's feed list.** Phase one is verifying each feed
+exposes a working audio URL, which needs no code.
+
+**YouTube stays until podcasts prove out.** Deleting it early would cost 1,661
+lines, five tools, seven test files, and ORIS's only scheduled content
+specialist, to replace a source that still works for everything except audio.
