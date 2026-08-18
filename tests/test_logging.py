@@ -29,3 +29,20 @@ def test_log_file_captures_json_lines(tmp_path):
     finally:
         # reset global logging to a benign stderr-only config (releases the file handler)
         configure_json_logging("INFO", None)
+
+
+def test_configure_json_logging_quietens_mcp_request_logging() -> None:
+    """The SDK logs a line per request, and a stdio host shows stderr to the user.
+
+    Every call is already in the audit trail, so this removes noise rather than
+    information. Set on the library logger, since FastMCP also calls basicConfig
+    and owns root's level.
+    """
+    import logging
+
+    logging.getLogger("mcp.server").setLevel(logging.NOTSET)
+
+    configure_json_logging("INFO", None)
+
+    assert logging.getLogger("mcp.server").level == logging.WARNING
+    assert logging.getLogger("mcp.server.lowlevel.server").getEffectiveLevel() == logging.WARNING

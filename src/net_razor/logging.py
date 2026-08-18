@@ -27,6 +27,13 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
+# The MCP SDK logs one line per request at INFO. A stdio host reserves stdout
+# for the protocol and shows stderr to the user, so on an interactive host that
+# arrives in the middle of whatever they are reading. Net-Razor's own audit
+# trail already records every call, so this adds nothing the operator lacks.
+NOISY_LOGGER_PREFIXES = ("mcp.server",)
+
+
 def configure_json_logging(level: str, log_file: Path | None = None) -> None:
     # stderr is always present (stdout is reserved for the MCP protocol). A file
     # handler is added when LOG_FILE is set, since an MCP host often drops stderr.
@@ -37,3 +44,7 @@ def configure_json_logging(level: str, log_file: Path | None = None) -> None:
     logging.basicConfig(level=level.upper(), format="%(message)s", handlers=handlers, force=True)
     for handler in logging.getLogger().handlers:
         handler.setFormatter(JsonFormatter())
+    # Set on the library logger itself, not on root: FastMCP calls basicConfig
+    # too, so root's level is whatever it last decided.
+    for name in NOISY_LOGGER_PREFIXES:
+        logging.getLogger(name).setLevel(logging.WARNING)

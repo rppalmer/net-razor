@@ -11,12 +11,20 @@ from net_razor.sources.yt.channel_ref import ChannelRef, parse_channel_refs
 
 _REPO_ROOT = find_repo_root(Path(__file__))
 
+# Credentials and operator data live in a fixed home directory, not the checkout.
+# An MCP host chooses the working directory and passes a narrow environment, so
+# anything resolved from the checkout is only found when something happens to
+# launch from the right place. A home path resolves identically from VS Code, an
+# agent, or a service, survives a re-clone, and keeps secrets out of a directory
+# that is under version control.
+_HOME_ROOT = Path.home() / ".net-razor"
+
 # Secrets and toggles live in .env; the channel list lives in its own file.
 # Keeping the list out of .env removes a whole class of dotenv formatting traps:
 # a multi-line value had to be double-quoted or only its first line was read, and
 # a `#` comment inside the quotes silently swallowed an entry.
-_ENV_FILES = (_REPO_ROOT / ".env",)
-_CHANNELS_FILE = _REPO_ROOT / "channels.txt"
+_ENV_FILES = (_HOME_ROOT / ".env",)
+_CHANNELS_FILE = _HOME_ROOT / "channels.txt"
 
 
 class Settings(BaseSettings):
@@ -30,7 +38,7 @@ class Settings(BaseSettings):
     )
 
     # storage / runtime
-    database_path: Path = _REPO_ROOT / "data" / "net_razor_audit.db"
+    database_path: Path = _HOME_ROOT / "data" / "net_razor_audit.db"
     log_level: str = "INFO"
     # Optional log file. Under an MCP host, the server's stderr is often discarded, so
     # set LOG_FILE to capture logs reliably (e.g. logs/net-razor.log).
@@ -59,22 +67,25 @@ class Settings(BaseSettings):
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)
 
+    # A relative override resolves against the home directory, not the checkout,
+    # for the same reason the defaults live there: the checkout is not where the
+    # process necessarily starts, and operator data does not belong in it.
     @field_validator("database_path")
     @classmethod
     def _resolve_database_path(cls, value: Path) -> Path:
-        return value if value.is_absolute() else _REPO_ROOT / value
+        return value if value.is_absolute() else _HOME_ROOT / value
 
     @field_validator("log_file")
     @classmethod
     def _resolve_log_file(cls, value: Path | None) -> Path | None:
         if value is None:
             return None
-        return value if value.is_absolute() else _REPO_ROOT / value
+        return value if value.is_absolute() else _HOME_ROOT / value
 
     @field_validator("channels_file")
     @classmethod
     def _resolve_channels_file(cls, value: Path) -> Path:
-        return value if value.is_absolute() else _REPO_ROOT / value
+        return value if value.is_absolute() else _HOME_ROOT / value
 
     @field_validator("yt_search_mode")
     @classmethod
@@ -142,7 +153,13 @@ class Settings(BaseSettings):
 
     @property
     def repo_root(self) -> Path:
+        """The checkout. Locates code — the vendored X backend — never data."""
         return _REPO_ROOT
+
+    @property
+    def home_root(self) -> Path:
+        """Where credentials and operator data live, independent of the checkout."""
+        return _HOME_ROOT
 
 
 @lru_cache

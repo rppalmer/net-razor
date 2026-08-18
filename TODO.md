@@ -438,31 +438,45 @@ now point `channels_file` at a nonexistent path, with a guard test asserting it.
 
 ## Roadmap — not scheduled
 
-### R1 · Whisper fallback for caption-less videos — **deferred**
+### R1 · Whisper fallback for caption-less videos — **dropped, measured**
 
-Parked by decision: the cheaper fix is choosing channels whose videos
-reliably have captions. Revisit only if the miss rate climbs. The design
-notes below stand; the simplest viable version needs **no MCP server
-changes at all** -- a transcript written into the audit store by any means
-is already served by `yt_transcript`, paged and cached (verified against a
-scratch database).
+**Measured 2026-08-18. The answer is no.** Four caption failures in the entire
+audit history, all `transcripts_disabled`; `no_transcript_found` has never fired
+once. Two are identifiable videos. The other two are digest calls against the
+same channel seven minutes apart on one day, so almost certainly one video
+counted twice. Two to four distinct videos lost since 2026-07-07.
 
-Worth doing. Not next, and **not as a normal tool call.**
+The gate written here beforehand was "four videos from one livestream channel,
+drop the idea." That is what the data says, so it is dropped.
 
-**Measure first — no code required.** The `errors` table has been recording
-`transcripts_disabled` and `no_transcript_found` for every failure, with video ID
-and URL attached (`enrich.py:84-91`). One SQL query answers "how many videos did I
-actually lose last month, and from which channels?" If it's four videos from one
-livestream channel, drop the idea. If it's forty across half the list, build it.
-Ten minutes of querying can save a week of work.
+**The sample is thin, and honestly so.** Calls cluster into three weeks with
+empty weeks between them — hand-driven development traffic, not a nightly job
+running steadily. Thirty-seven transcript-fetching calls in total, twenty-six of
+them during a single week of testing. Re-run the count after a month of the
+scheduled job genuinely running:
+
+```sql
+SELECT json_extract(error_json,'$.type'), COUNT(*) FROM errors
+WHERE json_extract(error_json,'$.type')
+      IN ('transcripts_disabled','no_transcript_found');
+```
+
+Single digits after that means this stays dropped for good. The notes below are
+kept so the reasoning is not re-derived from scratch. The simplest viable
+version would still need **no MCP server changes at all** — a transcript written
+into the audit store by any means is already served by `yt_transcript`, paged and
+cached (verified against a scratch database).
 
 **Shape.** Audio only (`yt-dlp -f bestaudio`) — roughly a tenth of the data of a
 full download, and Whisper ignores the video track anyway. Then a local Whisper
 implementation.
 
-**It cannot be a synchronous tool.** A 40-minute video is realistically 4–10
-minutes of CPU. The documented MCP host timeout is 60 seconds. The shape that
-works is a job:
+**It cannot be a synchronous tool — with one caveat found later.** A 40-minute
+video is realistically 4–10 minutes of CPU, and a generic MCP host gives up
+around 60 seconds. But the only consumer is ORIS, which launches this server
+itself and sets its own read timeout in its client config. A blocking call is
+therefore workable *there*, and the job shape below is not forced. For a generic
+host it still is:
 
 ```
 yt_request_transcription(video_id)  → returns immediately, "queued"
@@ -475,8 +489,17 @@ nightly digest that's ideal — the queue fills during the day and drains
 overnight.
 
 **Do T2 and T9 first.** A Whisper-produced transcript then lands in exactly the
-same table and is served by the same tool with the same paging, and the consumer
-never knows which one it got.
+same table and is served by the same tool with the same paging. It must still be
+*distinguishable* — see the `source_backend` contract in the README. A consumer
+that cannot tell will repeat Whisper's mangled names and version numbers as
+fact, cited to the video.
+
+Two storage details would bite whoever builds this. `stored_transcript()` matches
+only rows written with `source = 'yt'`, and the lookup above it rejects any
+stored transcript whose `language_code` does not satisfy the request. A payload
+written with a null or non-standard language code is invisible to
+`yt_transcript`, which then goes back to YouTube and fails again with the same
+caption error — silently, with nothing explaining why.
 
 **Costs, honestly.** `yt-dlp` (which updates constantly, because it must), a
 Whisper implementation, a model file of a few hundred MB to a few GB, temp audio,
@@ -538,3 +561,31 @@ re-derived.
 The costs are accepted knowingly: a schema hop at the boundary, and a dependency
 on the launching host's environment — which is why `NODE_BINARY` sometimes needs
 an absolute path.
+
+### R5 · Podcasts — **considered and dropped**
+
+Dropped 2026-08-18, before any code. The idea was a dedicated podcast source
+(`podcasts.txt` of RSS feeds, plus new-episodes / transcript / mark-processed
+tools) to get transcripts more reliably than YouTube provides them.
+
+Three reasons it went:
+
+**The premise did not survive R1's measurement.** Podcasts were meant to fix an
+inconsistency in YouTube transcripts. That inconsistency was then measured at
+four failures in the entire audit history. There is no problem here to solve.
+
+**It needed a paid third party.** The design was "try the publisher's
+`<podcast:transcript>` tag first, fall back to Taddy." Adoption of that tag is
+thin, so in practice Taddy would not have been a fallback — it would have been
+the implementation. A per-episode dependency on an external paid service does
+not belong in a tool whose point is running locally against providers directly.
+
+**Most podcasts publish to YouTube anyway**, where the existing channel flow
+already handles them.
+
+**What this costs, accepted knowingly.** Publisher transcripts often carry
+speaker labels and YouTube auto-captions do not, so attributing a claim to a
+named person now rests on the consuming agent inferring it. And a show that
+posts only clips to YouTube while keeping full episodes audio-only is a show
+Net-Razor sees partially or not at all. Revisit only if either of those turns
+into an actual complaint about a digest.

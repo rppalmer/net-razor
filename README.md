@@ -85,10 +85,11 @@ LOG_FILE=logs/net-razor.log
 # YOUTUBE_API_KEY=your_youtube_data_api_key
 ```
 
-The YouTube channel list is **not** in `.env` — it lives in `channels.txt`:
+The YouTube channel list is **not** in `.env` — it lives in `~/.net-razor/channels.txt`:
 
 ```bash
-cp channels.example.txt channels.txt
+mkdir -p ~/.net-razor
+cp channels.example.txt ~/.net-razor/channels.txt
 ```
 
 ```
@@ -110,8 +111,8 @@ deserves a commit, not a `.env` edit.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `DATABASE_PATH` | SQLite audit-store location. Handy for pointing a one-off run at a scratch database | `data/net_razor_audit.db` |
-| `CHANNELS_FILE` | Where the YouTube channel list lives | `channels.txt` |
+| `DATABASE_PATH` | SQLite audit-store location. A relative value resolves against `~/.net-razor` | `~/.net-razor/data/net_razor_audit.db` |
+| `CHANNELS_FILE` | Where the YouTube channel list lives | `~/.net-razor/channels.txt` |
 | `LOG_LEVEL` | Log verbosity (`DEBUG`, `INFO`, `WARNING`, …) | `INFO` |
 | `LOG_FILE` | Also write JSON logs to this file. Set it — MCP hosts usually discard the server's stderr | *unset (stderr only)* |
 | `REQUEST_TIMEOUT_SECONDS` | HTTP timeout for every outbound request: HN, YouTube RSS, the YouTube Data API, and transcript fetches | `30` |
@@ -137,7 +138,7 @@ deserves a commit, not a `.env` edit.
 
 ### Channel list
 
-`channels.txt` at the repo root — one channel per line. `#` starts a comment anywhere on a line.
+`~/.net-razor/channels.txt` — one channel per line. `#` starts a comment anywhere on a line.
 No quoting, no escaping, no line-continuation rules.
 
 | Form | Example |
@@ -223,12 +224,12 @@ defaults come from the config variables shown below. All are optional:
 | `videos_per_channel` | Maximum videos per channel | `5` |
 | `transcript_limit_per_channel` | How many of each channel's videos to fetch transcripts for | `2` |
 | `fetch_transcripts` | Whether to fetch transcripts at all | `true` |
-| `channels` | Channels to use for this one call instead of `channels.txt` (same forms as above) | the configured channels |
+| `channels` | Channels to use for this one call instead of `~/.net-razor/channels.txt` (same forms as above) | the configured channels |
 | `only_new` | Skip videos already returned by a prior digest run (dedup across runs) | `YT_DIGEST_ONLY_NEW` (`false`) |
 | `require_transcript` | Skip videos with no fetchable transcript (e.g. captions disabled) instead of falling back to the description | `YT_DIGEST_REQUIRE_TRANSCRIPT` (`false`) |
 | `max_transcript_chars` | Cap each transcript's characters (`0` = no cap); truncated items set `truncated: true` | `YT_MAX_TRANSCRIPT_CHARS` (`40000`) |
 
-(Per-channel `| videos= days=` overrides in `channels.txt` still win over the
+(Per-channel `| videos= days=` overrides in `~/.net-razor/channels.txt` still win over the
 `videos_per_channel` / `days` parameters — see [Per-channel overrides](#per-channel-overrides).)
 
 **Deduplicating across daily runs.** `only_new` drops any video already returned by an earlier
@@ -372,6 +373,20 @@ and act on them. `retriable` distinguishes "wait and try again" (`rate_limited`,
 `upstream_error`) from "this will fail identically forever" (`not_configured`,
 `invalid_video_url`, `transcripts_disabled`).
 
+**`type` values are a contract, not an internal detail.** They come from a lookup table mapping
+each provider library's exception classes onto Net-Razor's own strings, so a published value stays
+put even when an upstream library renames its exceptions. Consumers may branch on them. The
+YouTube transcript path publishes `transcripts_disabled`, `no_transcript_found`,
+`video_unavailable`, `invalid_video_url`, and `request_failed`.
+
+**`source_backend` says which backend produced an item.** Every source sets it — `yt-api`,
+`hn-api`, `arxiv-api`, `x-api` — and anything that ever produces a transcript by some other means
+must carry a different value rather than reusing the provider's. `is_generated` does not cover
+this; it already answers a different question, namely whether YouTube's captions were
+auto-generated or uploaded by a human. Two axes, two fields. A consumer that cannot tell a
+machine-made transcript from a published one will repeat its mangled names and version numbers as
+fact, cited to the video.
+
 **Agent prompt.** [prompts/youtube-digest.md](prompts/youtube-digest.md) is host-neutral prompt
 guidance for the "summarize my channels" workflow — the one-video-at-a-time loop that keeps peak
 context flat. Paste it into your agent's system prompt.
@@ -416,7 +431,7 @@ keeping CLI copies meant every new source had to be wired into two surfaces.
 
 The composition root (`net_razor.app.create_app`) wires together:
 
-- A SQLite audit store at `data/net_razor_audit.db` by default (`calls`, `items`, `raw`,
+- A SQLite audit store at `~/.net-razor/data/net_razor_audit.db` by default (`calls`, `items`, `raw`,
   `errors`, `youtube_processed_videos`), written for every tool call by the audit recorder
 - X search via the vendored, subprocess-isolated Node backend
 - Hacker News search via the Algolia HN API

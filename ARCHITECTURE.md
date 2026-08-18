@@ -30,7 +30,7 @@ that share one core:
   clock.py  audit/recorder   sources/…      config.py
                   │            (registry)
                   ▼
-            audit/store.py ──────────► SQLite (data/net_razor_audit.db)
+            audit/store.py ──────────► SQLite (~/.net-razor/data/…)
 ```
 
 The two adapters are not symmetric, and deliberately so. MCP carries the full
@@ -259,7 +259,8 @@ because there is almost nothing in it to test.
 
 ## Configuration
 
-Fourteen environment variables in `.env`, plus `channels.txt` for the YouTube
+Fourteen environment variables in `~/.net-razor/.env`, plus
+`~/.net-razor/channels.txt` for the YouTube
 channel list. Two rules shaped that split:
 
 - **Secrets and toggles in `.env`; lists in files.** A multi-line dotenv value had
