@@ -223,30 +223,50 @@ Assert properties rather than literals.
 
 ## The operator's feeds, verified 2026-08-18
 
-Nine shows. All nine resolve from their Apple IDs to a real RSS feed, and all
-nine serve audio on a plain ranged GET. Phase one passes with no exceptions.
+Nine shows were checked. All nine resolved from their Apple IDs to a real RSS
+feed and all nine served audio on a plain ranged GET. Phase one passed with no
+access failures of any kind.
 
-| show | episode length | transcribe time | publisher transcript |
-|---|---|---|---|
-| AREA52 - DEBRIEFED | 184 min | 8.3 min | no |
-| That UFO Podcast | 125 min | 5.7 min | no |
-| LINUX Unplugged | 80 min | 3.6 min | yes |
-| WEAPONIZED | 79 min | 3.6 min | no |
-| Talkin' Bout [Infosec] News | 66 min | 3.0 min | yes |
-| KCRW's Left, Right & Center | 50 min | 2.3 min | no |
-| Locked On Pistons | 32 min | 1.5 min | no |
-| The MeidasTouch Podcast | 18 min | 0.8 min | no |
-| Pistons Daily | 18 min | 0.8 min | no |
+One was then removed on volume. Eight remain.
 
-One episode from every show is 10.9 hours of audio, about 30 minutes of
-transcription. Excluding the two with publisher transcripts, 23 minutes.
+| show | eps/week | audio/week | Whisper/week | publisher transcript |
+|---|---|---|---|---|
+| That UFO Podcast | 3 | 4.5h | 12.4 min | no |
+| AREA52 - DEBRIEFED | 1 | 3.1h | 8.3 min | no |
+| Locked On Pistons | 4 | 2.3h | 6.3 min | no |
+| Pistons Daily | 6 | 1.8h | 4.9 min | no |
+| KCRW's Left, Right & Center | 1 | 0.8h | 2.3 min | no |
+| Talkin' Bout [Infosec] News | 1 | 1.1h | — | yes |
+| LINUX Unplugged | 1 | 1.3h | — | yes |
+| WEAPONIZED | 0 that week | — | — | no |
 
-Two of nine publish transcripts, so Whisper carries more of the load here than
-the earlier 3-of-10 sample suggested.
+**About 34 minutes of transcription per week, roughly 5 minutes a night.**
+Trivial overnight, and far below what the memory and scheduling analysis was
+sized against.
 
-The MeidasTouch Podcast is on this list. Its YouTube videos produced every
-caption failure in the audit history and drove R1 in the first place. The podcast
-feed serves what YouTube would not.
+Two of eight publish their own transcripts, so Whisper carries about 75% of the
+work.
+
+**Episode length drives the timeout, not the weekly total.** AREA52 runs three
+hours, which is 8.3 minutes in a single call. That is what the 15-minute timeout
+is sized for.
+
+### The MeidasTouch Podcast was removed
+
+Removed on volume, not access — the feed works perfectly. It published 34
+episodes and 16.8 hours of audio in seven days. That is more episodes than every
+other show on the list combined, and 57% of the total transcription cost, from
+one source.
+
+This is worth remembering as a general property: a podcast feed's cost is
+episode frequency times length, and a high-frequency show can dominate a list
+without being individually large. Check weekly volume before adding a feed, not
+just whether it resolves.
+
+The irony is recorded for completeness: MeidasTouch YouTube videos produced every
+caption failure in the audit history and were the original reason R1 existed. The
+podcast feed serves exactly what YouTube refused, and it was dropped anyway
+because it serves far too much of it.
 
 ## Sequencing
 
