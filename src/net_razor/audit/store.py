@@ -108,6 +108,13 @@ class AuditStore:
                     processed_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS podcast_processed_episodes (
+                    episode_id TEXT PRIMARY KEY,
+                    transcript_call_id TEXT NOT NULL,
+                    acknowledgement_call_id TEXT NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_calls_parent ON calls(parent_id);
                 CREATE INDEX IF NOT EXISTS idx_items_call ON items(call_id);
                 CREATE INDEX IF NOT EXISTS idx_raw_call ON raw(call_id);
@@ -387,6 +394,50 @@ class AuditStore:
             if isinstance(payload, dict) and payload.get("segments"):
                 return payload
         return None
+
+    def processed_podcast_episode_ids(self) -> set[str]:
+        """Episode IDs explicitly acknowledged as fully processed."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT episode_id FROM podcast_processed_episodes"
+            ).fetchall()
+        return {row["episode_id"] for row in rows}
+
+    def acknowledge_podcast_transcripts(
+        self,
+        *,
+        transcript_call_ids: list[str],
+        acknowledgement_call_id: str,
+        now: str,
+    ) -> tuple[int, list[str]]:
+        """Acknowledge episodes by their transcript call IDs.
+
+        Returns the count acknowledged and the call IDs that matched nothing, so a
+        partly-wrong request still records the part that was right.
+        """
+        acknowledged = 0
+        unknown: list[str] = []
+        with self._connect() as connection:
+            for call_id in transcript_call_ids:
+                row = connection.execute(
+                    "SELECT source_id FROM items WHERE call_id = ? AND source = 'podcast' "
+                    "LIMIT 1",
+                    (call_id,),
+                ).fetchone()
+                if row is None:
+                    unknown.append(call_id)
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO podcast_processed_episodes
+                        (episode_id, transcript_call_id, acknowledgement_call_id, processed_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(episode_id) DO NOTHING
+                    """,
+                    (row["source_id"], call_id, acknowledgement_call_id, now),
+                )
+                acknowledged += 1
+        return acknowledged, unknown
 
     def processed_youtube_video_ids(self) -> set[str]:
         """Return video IDs explicitly acknowledged as fully processed."""

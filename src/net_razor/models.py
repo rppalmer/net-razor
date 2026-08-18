@@ -398,6 +398,10 @@ class ResearchRequest(BaseModel):
         return value
 
 
+class PodcastMarkProcessedRequest(BaseModel):
+    call_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class PodcastTranscriptRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

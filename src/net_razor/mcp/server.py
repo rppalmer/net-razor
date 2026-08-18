@@ -9,6 +9,7 @@ from net_razor.app import App, create_app
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
+    PodcastMarkProcessedRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
     ResearchRequest,
@@ -139,6 +140,19 @@ def create_server(app: App | None = None) -> FastMCP:
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
             )
+        )
+
+    @mcp.tool()
+    async def net_razor_podcast_mark_processed(call_ids: list[str]) -> dict[str, Any]:
+        """Acknowledge podcast transcripts once downstream work has succeeded.
+
+        Pass the call_id from each podcast_transcript or
+        podcast_whisper_transcript response. Acknowledged episodes stop appearing
+        in podcast_new_episodes. Call this only after the work actually
+        succeeded: the record is durable across restarts.
+        """
+        return await app.podcast_mark_processed(
+            PodcastMarkProcessedRequest(call_ids=call_ids)
         )
 
     @mcp.tool()
