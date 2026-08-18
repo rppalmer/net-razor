@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "net_razor_yt_mark_processed",
     "net_razor_yt_transcript",
     "net_razor_podcast_new_episodes",
+    "net_razor_podcast_transcript",
 }
 
 # Every command the CLI still offers. The search tools are MCP-only by design;

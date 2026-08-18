@@ -357,6 +357,37 @@ class AuditStore:
                 return nested
         return None
 
+    def stored_podcast_transcript(self, episode_id: str) -> dict[str, Any] | None:
+        """The most recent stored transcript payload for an episode, if any.
+
+        Deliberately separate from ``stored_transcript``, which is YouTube's. The
+        two barely differ, but YouTube may be removed once podcasts prove out, and
+        sharing would turn that removal into an untangling rather than a deletion.
+
+        Unlike the YouTube lookup this does **not** filter on language: podcasts
+        have no language preference parameter, so there is no mismatch to guard
+        against, and a filter would only create a way for a stored transcript to
+        become silently invisible and re-fetched forever.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT raw_json FROM raw
+                WHERE source = 'podcast' AND source_id = ?
+                -- rowid breaks the tie: two payloads written in the same instant
+                -- would otherwise return in arbitrary order, which would make
+                -- "a Whisper transcript supersedes a publisher one" merely likely
+                -- rather than guaranteed.
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (episode_id,),
+            ).fetchall()
+        for row in rows:
+            payload = _load(row["raw_json"])
+            if isinstance(payload, dict) and payload.get("segments"):
+                return payload
+        return None
+
     def processed_youtube_video_ids(self) -> set[str]:
         """Return video IDs explicitly acknowledged as fully processed."""
         with self._connect() as connection:

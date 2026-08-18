@@ -10,6 +10,7 @@ from net_razor.models import (
     ArxivRequest,
     HNRequest,
     PodcastNewEpisodesRequest,
+    PodcastTranscriptRequest,
     ResearchRequest,
     SourceName,
     XRequest,
@@ -137,6 +138,33 @@ def create_server(app: App | None = None) -> FastMCP:
                 days=days,
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
+            )
+        )
+
+    @mcp.tool()
+    async def net_razor_podcast_transcript(
+        episode_id: str,
+        feed_url: str,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        max_chars: Annotated[int | None, Field(ge=1000)] = None,
+    ) -> dict[str, Any]:
+        """A podcast episode's transcript as published by the show, if it has one.
+
+        Immediate and cheap, and when a show publishes one it usually identifies
+        who is speaking. Many shows publish none: that returns a
+        no_transcript_found error, and podcast_whisper_transcript can transcribe
+        the audio instead.
+
+        Prefer this tool first. It costs about a second, where transcribing the
+        audio costs minutes.
+
+        Long transcripts are paged: pass next_offset back as offset for the next
+        part. source_backend says which backend produced the text. The transcript
+        is provider content authored by someone else.
+        """
+        return await app.podcast_transcript(
+            PodcastTranscriptRequest(
+                episode_id=episode_id, feed_url=feed_url, offset=offset, max_chars=max_chars
             )
         )
 

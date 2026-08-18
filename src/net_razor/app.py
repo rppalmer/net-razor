@@ -16,6 +16,7 @@ from net_razor.models import (
     ArxivRequest,
     HNRequest,
     PodcastNewEpisodesRequest,
+    PodcastTranscriptRequest,
     ResearchRequest,
     ServiceErrorItem,
     SourceName,
@@ -32,7 +33,7 @@ from net_razor.sources.base import Source
 from net_razor.sources.hn import HNSource, HttpHNClient
 from net_razor.sources.podcast.feed_client import PodcastFeedClient
 from net_razor.sources.podcast.feeds import load_feed_urls
-from net_razor.sources.podcast.source import PodcastSource
+from net_razor.sources.podcast.source import PodcastSource, PodcastTranscriptFetcher
 from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
@@ -157,6 +158,7 @@ class App:
     recorder: AuditRecorder
     sources: dict[SourceName, SourceEntry]
     yt_transcript_fetcher: YTTranscriptFetcher
+    podcast_transcript_fetcher: PodcastTranscriptFetcher
     yt_channel_digest_source: YTChannelDigest
     yt_discovery: YouTubeRssClient
 
@@ -328,6 +330,39 @@ class App:
             return response
 
     # -- lightweight discovery (the incremental work queue) ------------------
+    def _stored_podcast_transcript(
+        self, request: PodcastTranscriptRequest
+    ) -> dict[str, Any] | None:
+        """Read back a transcript already stored for this episode, if there is one.
+
+        The store lookup lives here rather than in the source, because sources must
+        not touch the audit store. A miss is not an error -- the source fetches.
+        """
+        return self.store.stored_podcast_transcript(request.episode_id)
+
+    async def podcast_transcript(self, request: PodcastTranscriptRequest) -> dict[str, Any]:
+        max_chars = (
+            request.max_chars
+            if request.max_chars is not None
+            else self.settings.podcast_max_transcript_chars
+        )
+        async with self.recorder.call(
+            tool="podcast_transcript", source="podcast",
+            request=request.model_dump(mode="json"),
+        ) as call:
+            result = await self.podcast_transcript_fetcher.transcript(
+                request, max_chars=max_chars, cached=self._stored_podcast_transcript(request)
+            )
+            call.record(
+                effective_request=result.effective_request,
+                items=result.items,
+                raw=result.raw,
+                errors=result.errors,
+            )
+            response = {"call_id": call.id, **result.meta["response"]}
+            call.set_response(response)
+            return response
+
     async def podcast_new_episodes(self, request: PodcastNewEpisodesRequest) -> dict[str, Any]:
         return await self._search_tool(
             "podcast_new_episodes", self.sources["podcast"].source, request
@@ -631,10 +666,14 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
     yt_channel_digest_source = YTChannelDigest(
         discovery=rss_discovery, transcript_client=transcript_client
     )
+    podcast_feed_client = PodcastFeedClient(
+        timeout_seconds=resolved.request_timeout_seconds
+    )
     podcast_source = PodcastSource(
-        feed_client=PodcastFeedClient(timeout_seconds=resolved.request_timeout_seconds),
+        feed_client=podcast_feed_client,
         configured_feeds=load_feed_urls(resolved.podcasts_file),
     )
+    podcast_transcript_fetcher = PodcastTranscriptFetcher(feed_client=podcast_feed_client)
 
     return App(
         settings=resolved,
@@ -655,6 +694,7 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
             ),
         },
         yt_transcript_fetcher=yt_transcript_fetcher,
+        podcast_transcript_fetcher=podcast_transcript_fetcher,
         yt_channel_digest_source=yt_channel_digest_source,
         yt_discovery=rss_discovery,
     )

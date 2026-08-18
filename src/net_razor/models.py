@@ -398,6 +398,15 @@ class ResearchRequest(BaseModel):
         return value
 
 
+class PodcastTranscriptRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    episode_id: str
+    feed_url: str
+    offset: int = Field(default=0, ge=0)
+    max_chars: int | None = Field(default=None, ge=1000)
+
+
 class PodcastNewEpisodesRequest(BaseModel):
     """Lightweight discovery: recent episodes across feeds, no transcripts.
 
