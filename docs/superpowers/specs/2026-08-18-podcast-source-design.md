@@ -107,13 +107,16 @@ The consequence, accepted knowingly: once Whisper has run, the publisher version
 is no longer reachable through any tool. It remains in the audit store and can be
 recovered with SQL. Comparing the two versions is not a supported operation.
 
-**This has a sharp edge.** Running Whisper on an episode that had a publisher
-transcript destroys the speaker labels, replacing a better transcript with a
-worse one. In normal use this does not arise, because the agent calls the cheap
-tool first and only reaches for Whisper when it fails. It arises when the
-operator instructs the agent to use both. The tool descriptions must make the
-ordering and the cost explicit enough that "both" is a deliberate choice rather
-than an accident.
+**This has a sharp edge, and it is accepted.** Running Whisper on an episode that
+already had a publisher transcript destroys the speaker labels, replacing a
+better transcript with a worse one. The agent should not call Whisper when it
+already has the free transcript, and that cannot be guaranteed.
+
+**Decided 2026-08-18: do not design around it.** No deduplication, no guard that
+refuses to overwrite, no "already transcribed" check. The risk does not justify
+the machinery. The tool descriptions state the ordering and the cost; the
+consuming agent is trusted to act on them, and a wasted transcription costs three
+minutes of CPU on an idle machine.
 
 Two storage details are load-bearing and were found by reading the YouTube path.
 Both must be handled or the equivalent bug appears here:
@@ -177,9 +180,14 @@ task protocol, no background worker.
 
 This is safe because the only consumer is ORIS, which launches this server itself
 and sets its own read timeout. The 60-second figure in older notes applies to
-generic hosts, not this one. At 22x realtime, a 62-minute episode takes about
-three minutes. ORIS raises its timeout for this tool alone and withholds the tool
-from its interactive path, so nobody waits on it in a chat.
+generic hosts, not this one.
+
+**The timeout must be sized off the operator's actual feeds, not an average.**
+The longest show on the list runs three hours, which is 8.3 minutes of
+transcription. ORIS should allow about 15 minutes for this tool alone, and
+withhold it from the interactive path so nobody waits on it in a chat. An earlier
+draft said 120 seconds was nearly sufficient; that was based on a 62-minute
+sample and is wrong for this list.
 
 One episode per call. A failure part-way costs one episode, not the run.
 
@@ -213,10 +221,36 @@ a guard test asserting it, mirroring the fix already made for `channels.txt`.
 
 Assert properties rather than literals.
 
+## The operator's feeds, verified 2026-08-18
+
+Nine shows. All nine resolve from their Apple IDs to a real RSS feed, and all
+nine serve audio on a plain ranged GET. Phase one passes with no exceptions.
+
+| show | episode length | transcribe time | publisher transcript |
+|---|---|---|---|
+| AREA52 - DEBRIEFED | 184 min | 8.3 min | no |
+| That UFO Podcast | 125 min | 5.7 min | no |
+| LINUX Unplugged | 80 min | 3.6 min | yes |
+| WEAPONIZED | 79 min | 3.6 min | no |
+| Talkin' Bout [Infosec] News | 66 min | 3.0 min | yes |
+| KCRW's Left, Right & Center | 50 min | 2.3 min | no |
+| Locked On Pistons | 32 min | 1.5 min | no |
+| The MeidasTouch Podcast | 18 min | 0.8 min | no |
+| Pistons Daily | 18 min | 0.8 min | no |
+
+One episode from every show is 10.9 hours of audio, about 30 minutes of
+transcription. Excluding the two with publisher transcripts, 23 minutes.
+
+Two of nine publish transcripts, so Whisper carries more of the load here than
+the earlier 3-of-10 sample suggested.
+
+The MeidasTouch Podcast is on this list. Its YouTube videos produced every
+caption failure in the audit history and drove R1 in the first place. The podcast
+feed serves what YouTube would not.
+
 ## Sequencing
 
-1. **Feed list.** The operator supplies it. Verify each feed exposes a working
-   audio URL and record which declare publisher transcripts. No code required.
+1. ~~**Feed list.**~~ Done 2026-08-18; see the table above.
 2. **Build the source** — discovery, publisher transcript, storage, paging.
 3. **Build the Whisper subprocess** behind its flag.
 4. **Run both YouTube and podcasts** for a month.
