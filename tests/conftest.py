@@ -49,7 +49,8 @@ def make_app(store, clock):
 
     def _make(
         *, x=None, hn=None, yt=None, arxiv=None, podcast=None, yt_transcript=None,
-        podcast_transcript=None, yt_digest=None, yt_discovery=None, settings=None,
+        podcast_transcript=None, podcast_whisper=None, yt_digest=None,
+        yt_discovery=None, settings=None,
     ) -> App:
         return App(
             settings=settings or stub_settings(database_path=store.database_path),
@@ -80,6 +81,9 @@ def make_app(store, clock):
             },
             yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
             podcast_transcript_fetcher=podcast_transcript or _StubPodcastTranscriptFetcher(),
+            podcast_whisper_fetcher=podcast_whisper or _StubPodcastWhisperFetcher(
+                enabled=(settings or stub_settings()).podcast_whisper_enabled
+            ),
             yt_channel_digest_source=yt_digest or _StubDigest(),
             yt_discovery=yt_discovery or _StubDiscovery(),
         )
@@ -130,6 +134,44 @@ class _StubPodcastTranscriptFetcher:
             language_code=cached.get("language_code"),
             backend=cached.get("source_backend") or "publisher",
             max_chars=max_chars, effective=effective, store_raw=False,
+        )
+
+
+class _StubPodcastWhisperFetcher:
+    """Whisper without a model: serves the store, else reports why it cannot run.
+
+    Never launches a subprocess, so no test loads a model or transcribes audio.
+    """
+
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled
+
+    async def transcript(self, request, *, max_chars, cached):
+        from net_razor.models import TranscriptSegment
+        from net_razor.sources.podcast.source import (
+            _transcript_error,
+            build_transcript_result,
+        )
+
+        effective = {"episode_id": request.episode_id, "feed_url": request.feed_url,
+                     "offset": request.offset, "max_chars": max_chars}
+        if cached is not None:
+            return build_transcript_result(
+                request,
+                segments=[TranscriptSegment(**s) for s in cached["segments"]],
+                language=cached.get("language"),
+                language_code=cached.get("language_code"),
+                backend=cached.get("source_backend") or "whisper",
+                max_chars=max_chars, effective=effective, store_raw=False,
+            )
+        if not self.enabled:
+            return _transcript_error(
+                effective, request, "not_configured",
+                "Local transcription is disabled.", backend="whisper",
+            )
+        return _transcript_error(
+            effective, request, "transcription_failed",
+            "stub fetcher does not transcribe", backend="whisper",
         )
 
 

@@ -35,6 +35,7 @@ _RETRIABLE_ERROR_TYPES = frozenset({
     "request_failed",
     "upstream_error",
     "transcript_failed",
+    "transcription_timeout",
 })
 
 
@@ -396,6 +397,15 @@ class ResearchRequest(BaseModel):
                 "podcast_transcript instead"
             )
         return value
+
+
+class PodcastWhisperTranscriptRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    episode_id: str
+    feed_url: str
+    offset: int = Field(default=0, ge=0)
+    max_chars: int | None = Field(default=None, ge=1000)
 
 
 class PodcastMarkProcessedRequest(BaseModel):

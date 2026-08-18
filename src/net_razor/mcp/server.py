@@ -12,6 +12,7 @@ from net_razor.models import (
     PodcastMarkProcessedRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
+    PodcastWhisperTranscriptRequest,
     ResearchRequest,
     SourceName,
     XRequest,
@@ -139,6 +140,35 @@ def create_server(app: App | None = None) -> FastMCP:
                 days=days,
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
+            )
+        )
+
+    @mcp.tool()
+    async def net_razor_podcast_whisper_transcript(
+        episode_id: str,
+        feed_url: str,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        max_chars: Annotated[int | None, Field(ge=1000)] = None,
+    ) -> dict[str, Any]:
+        """Transcribe a podcast episode's audio locally with Whisper.
+
+        EXPENSIVE AND SLOW. This downloads the episode and transcribes it on this
+        machine, taking roughly one minute per twenty minutes of audio -- several
+        minutes for a typical episode, longer for a long one. Try
+        podcast_transcript first: when a show publishes its own transcript it is
+        immediate and usually identifies who is speaking, which this does not.
+
+        Once an episode is transcribed here, podcast_transcript returns this
+        transcript for it thereafter, and re-asking is cheap because the stored
+        transcript is served without transcribing again.
+
+        Disabled by default; returns not_configured when it is off. The result is
+        machine-generated text and source_backend says so: names, acronyms and
+        version numbers are what it most often gets wrong.
+        """
+        return await app.podcast_whisper_transcript(
+            PodcastWhisperTranscriptRequest(
+                episode_id=episode_id, feed_url=feed_url, offset=offset, max_chars=max_chars
             )
         )
 

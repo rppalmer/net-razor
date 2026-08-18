@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ from net_razor.models import (
     PodcastMarkProcessedRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
+    PodcastWhisperTranscriptRequest,
     ResearchRequest,
     ServiceErrorItem,
     SourceName,
@@ -34,7 +36,11 @@ from net_razor.sources.base import Source
 from net_razor.sources.hn import HNSource, HttpHNClient
 from net_razor.sources.podcast.feed_client import PodcastFeedClient
 from net_razor.sources.podcast.feeds import load_feed_urls
-from net_razor.sources.podcast.source import PodcastSource, PodcastTranscriptFetcher
+from net_razor.sources.podcast.source import (
+    PodcastSource,
+    PodcastTranscriptFetcher,
+    PodcastWhisperFetcher,
+)
 from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
@@ -160,6 +166,7 @@ class App:
     sources: dict[SourceName, SourceEntry]
     yt_transcript_fetcher: YTTranscriptFetcher
     podcast_transcript_fetcher: PodcastTranscriptFetcher
+    podcast_whisper_fetcher: PodcastWhisperFetcher
     yt_channel_digest_source: YTChannelDigest
     yt_discovery: YouTubeRssClient
 
@@ -353,6 +360,37 @@ class App:
         ) as call:
             result = await self.podcast_transcript_fetcher.transcript(
                 request, max_chars=max_chars, cached=self._stored_podcast_transcript(request)
+            )
+            call.record(
+                effective_request=result.effective_request,
+                items=result.items,
+                raw=result.raw,
+                errors=result.errors,
+            )
+            response = {"call_id": call.id, **result.meta["response"]}
+            call.set_response(response)
+            return response
+
+    async def podcast_whisper_transcript(
+        self, request: PodcastWhisperTranscriptRequest
+    ) -> dict[str, Any]:
+        """Transcribe an episode's audio locally. Minutes, not seconds."""
+        max_chars = (
+            request.max_chars
+            if request.max_chars is not None
+            else self.settings.podcast_max_transcript_chars
+        )
+        lookup = PodcastTranscriptRequest(
+            episode_id=request.episode_id, feed_url=request.feed_url
+        )
+        async with self.recorder.call(
+            tool="podcast_whisper_transcript", source="podcast",
+            request=request.model_dump(mode="json"),
+        ) as call:
+            result = await self.podcast_whisper_fetcher.transcript(
+                lookup.model_copy(update={"offset": request.offset}),
+                max_chars=max_chars,
+                cached=self._stored_podcast_transcript(lookup),
             )
             call.record(
                 effective_request=result.effective_request,
@@ -719,6 +757,16 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         configured_feeds=load_feed_urls(resolved.podcasts_file),
     )
     podcast_transcript_fetcher = PodcastTranscriptFetcher(feed_client=podcast_feed_client)
+    podcast_whisper_fetcher = PodcastWhisperFetcher(
+        feed_client=podcast_feed_client,
+        enabled=resolved.podcast_whisper_enabled,
+        model=resolved.podcast_whisper_model,
+        timeout_seconds=resolved.podcast_whisper_timeout_seconds,
+        # This interpreter: the worker lives in this package and needs its imports.
+        executable=sys.executable,
+        max_audio_bytes=resolved.podcast_max_audio_bytes,
+        download_timeout_seconds=resolved.podcast_audio_timeout_seconds,
+    )
 
     return App(
         settings=resolved,
@@ -740,6 +788,7 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         },
         yt_transcript_fetcher=yt_transcript_fetcher,
         podcast_transcript_fetcher=podcast_transcript_fetcher,
+        podcast_whisper_fetcher=podcast_whisper_fetcher,
         yt_channel_digest_source=yt_channel_digest_source,
         yt_discovery=rss_discovery,
     )

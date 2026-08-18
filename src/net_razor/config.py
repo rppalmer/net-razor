@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # transcription. This is the ceiling before the subprocess is killed, sized so
     # the consumer's own timeout never fires first.
     podcast_whisper_timeout_seconds: float = Field(default=900, gt=0)
+    # A three-hour episode is around 170MB; this bounds a mislabelled feed.
+    podcast_max_audio_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    podcast_audio_timeout_seconds: float = Field(default=300, gt=0)
 
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)

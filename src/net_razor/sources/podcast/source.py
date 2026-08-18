@@ -11,7 +11,9 @@ normalized and handed back. Nothing in it is followed or acted upon.
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from net_razor.clock import ResolvedWindow
@@ -24,11 +26,13 @@ from net_razor.models import (
     ServiceErrorItem,
     TranscriptSegment,
 )
+from net_razor.sources.podcast.audio import AudioDownloadError, download_audio
 from net_razor.sources.podcast.feed_client import PodcastEpisode, PodcastFeedError
 from net_razor.sources.podcast.transcript_formats import (
     UnsupportedTranscriptFormat,
     parse_transcript,
 )
+from net_razor.sources.podcast.whisper_runner import WhisperError, run_whisper
 from net_razor.sources.yt.chunking import chunk_at, join_segments
 
 # A transcript fetch carries no publish date of its own. A fixed sentinel keeps
@@ -360,3 +364,138 @@ class PodcastTranscriptFetcher:
             if segments:
                 return segments, None, None
         return None
+
+
+class PodcastWhisperFetcher:
+    """Transcribes an episode's audio locally, in a subprocess that exits.
+
+    Shares paging and storage with the publisher path; only the origin of the
+    segments differs. Refuses when the feature is switched off, rather than
+    failing obscurely somewhere inside a missing dependency.
+    """
+
+    def __init__(
+        self,
+        *,
+        feed_client: FeedClient,
+        enabled: bool,
+        model: str,
+        timeout_seconds: float,
+        executable: str,
+        max_audio_bytes: int,
+        download_timeout_seconds: float,
+    ) -> None:
+        self._client = feed_client
+        self._enabled = enabled
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+        self._executable = executable
+        self._max_audio_bytes = max_audio_bytes
+        self._download_timeout_seconds = download_timeout_seconds
+
+    async def transcript(
+        self,
+        request: PodcastTranscriptRequest,
+        *,
+        max_chars: int,
+        cached: dict[str, Any] | None,
+    ) -> FetchResult:
+        effective = {
+            "episode_id": request.episode_id,
+            "feed_url": request.feed_url,
+            "offset": request.offset,
+            "max_chars": max_chars,
+            "model": self._model,
+        }
+
+        # Never spend minutes of CPU re-doing work already in the store.
+        if cached is not None:
+            return build_transcript_result(
+                request,
+                segments=[TranscriptSegment(**s) for s in cached["segments"]],
+                language=cached.get("language"),
+                language_code=cached.get("language_code"),
+                backend=cached.get("source_backend") or "whisper",
+                max_chars=max_chars,
+                effective=effective,
+                store_raw=False,
+            )
+
+        if not self._enabled:
+            return _transcript_error(
+                effective,
+                request,
+                "not_configured",
+                "Local transcription is disabled. Set PODCAST_WHISPER_ENABLED=true, "
+                "install the 'whisper' extra, and make sure ffmpeg is on PATH.",
+                backend="whisper",
+            )
+
+        try:
+            audio_url = await self._audio_url(request)
+        except PodcastFeedError as exc:
+            return _transcript_error(
+                effective, request, exc.error_type, exc.message, backend="whisper"
+            )
+        if audio_url is None:
+            return _transcript_error(
+                effective,
+                request,
+                "audio_unavailable",
+                "That episode is not in the feed, or it has no audio.",
+                backend="whisper",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="net-razor-audio-") as directory:
+            destination = Path(directory) / f"{request.episode_id}.audio"
+            try:
+                await download_audio(
+                    audio_url,
+                    destination=destination,
+                    timeout_seconds=self._download_timeout_seconds,
+                    max_bytes=self._max_audio_bytes,
+                    transport=None,
+                )
+            except AudioDownloadError as exc:
+                return _transcript_error(
+                    effective, request, exc.error_type, exc.message, backend="whisper"
+                )
+
+            try:
+                segments, language = await run_whisper(
+                    destination,
+                    model=self._model,
+                    timeout_seconds=self._timeout_seconds,
+                    executable=self._executable,
+                )
+            except WhisperError as exc:
+                return _transcript_error(
+                    effective, request, exc.error_type, exc.message, backend="whisper"
+                )
+
+        if not segments:
+            return _transcript_error(
+                effective,
+                request,
+                "transcription_failed",
+                "Transcription produced no text. The audio may be silent or unreadable.",
+                backend="whisper",
+            )
+
+        return build_transcript_result(
+            request,
+            segments=segments,
+            language=language,
+            language_code=language,
+            backend="whisper",
+            max_chars=max_chars,
+            effective=effective,
+            store_raw=True,
+        )
+
+    async def _audio_url(self, request: PodcastTranscriptRequest) -> str | None:
+        _show, episodes = await self._client.fetch_feed(request.feed_url)
+        episode = next(
+            (item for item in episodes if item.episode_id == request.episode_id), None
+        )
+        return episode.audio_url if episode is not None else None
