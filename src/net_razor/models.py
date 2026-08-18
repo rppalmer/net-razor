@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-SourceName = Literal["x", "hn", "yt", "arxiv"]
+SourceName = Literal["x", "hn", "yt", "arxiv", "podcast"]
 
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
@@ -80,7 +80,7 @@ class EvidenceItem(BaseModel):
     source: SourceName
     source_backend: str
     source_id: str
-    item_type: Literal["post", "video", "transcript", "paper"] = "post"
+    item_type: Literal["post", "video", "transcript", "paper", "episode"] = "post"
     canonical_url: str
     title: str | None = None
     text: str
@@ -381,6 +381,41 @@ class ResearchRequest(BaseModel):
             if source not in seen:
                 seen.append(source)
         return seen
+
+    @field_validator("sources")
+    @classmethod
+    def _reject_podcast(cls, value: list[str]) -> list[str]:
+        """Podcasts have no keyword search, so they cannot join a topic fan-out.
+
+        Matching a topic against episode titles would be a weak editorial guess,
+        which rule 5 forbids. Discovery is by feed and window instead.
+        """
+        if "podcast" in value:
+            raise ValueError(
+                "podcast has no topic search; use podcast_new_episodes and "
+                "podcast_transcript instead"
+            )
+        return value
+
+
+class PodcastNewEpisodesRequest(BaseModel):
+    """Lightweight discovery: recent episodes across feeds, no transcripts.
+
+    The work queue for the incremental flow -- list new episodes, then process one
+    at a time so only one transcript is ever in context.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # Empty means "every configured feed". A caller may narrow to specific feed URLs.
+    feeds: list[str] = Field(default_factory=list)
+    days: int = Field(default=7, ge=1, le=3650)
+    since: date | None = None
+    until: date | None = None
+    max_episodes_per_feed: int = Field(default=5, ge=1, le=25)
+    # By default only episodes not yet acknowledged are returned (a durable queue);
+    # set True to include ones already processed.
+    include_processed: bool = False
 
 
 # --------------------------------------------------------------------------- #

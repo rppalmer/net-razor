@@ -15,6 +15,7 @@ from net_razor.logging import configure_json_logging
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
+    PodcastNewEpisodesRequest,
     ResearchRequest,
     ServiceErrorItem,
     SourceName,
@@ -29,6 +30,9 @@ from net_razor.models import (
 from net_razor.sources.arxiv import ArxivSource, HttpArxivClient
 from net_razor.sources.base import Source
 from net_razor.sources.hn import HNSource, HttpHNClient
+from net_razor.sources.podcast.feed_client import PodcastFeedClient
+from net_razor.sources.podcast.feeds import load_feed_urls
+from net_razor.sources.podcast.source import PodcastSource
 from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
@@ -120,6 +124,15 @@ def _yt_leg(request: ResearchRequest) -> YTRequest:
         fetch_transcripts=True,
         transcript_limit=min(3, request.max_results_per_source),
     )
+
+
+def _podcast_leg(request: ResearchRequest) -> PodcastNewEpisodesRequest:
+    """Exists only to satisfy the registry's shape.
+
+    Podcasts never join a ``research`` fan-out: there is no keyword search over
+    episodes. ``ResearchRequest`` rejects ``"podcast"`` before this is reachable.
+    """
+    raise ValueError("podcast does not participate in research fan-out")
 
 
 def _arxiv_leg(request: ResearchRequest) -> ArxivRequest:
@@ -315,6 +328,11 @@ class App:
             return response
 
     # -- lightweight discovery (the incremental work queue) ------------------
+    async def podcast_new_episodes(self, request: PodcastNewEpisodesRequest) -> dict[str, Any]:
+        return await self._search_tool(
+            "podcast_new_episodes", self.sources["podcast"].source, request
+        )
+
     async def yt_new_videos(self, request: YTNewVideosRequest) -> dict[str, Any]:
         async with self.recorder.call(
             tool="yt_new_videos", source="yt", request=request.model_dump(mode="json")
@@ -613,6 +631,10 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
     yt_channel_digest_source = YTChannelDigest(
         discovery=rss_discovery, transcript_client=transcript_client
     )
+    podcast_source = PodcastSource(
+        feed_client=PodcastFeedClient(timeout_seconds=resolved.request_timeout_seconds),
+        configured_feeds=load_feed_urls(resolved.podcasts_file),
+    )
 
     return App(
         settings=resolved,
@@ -627,6 +649,9 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
             "yt": SourceEntry(source=yt_source, label="YT", build_request=_yt_leg),
             "arxiv": SourceEntry(
                 source=arxiv_source, label="arXiv", build_request=_arxiv_leg
+            ),
+            "podcast": SourceEntry(
+                source=podcast_source, label="Podcasts", build_request=_podcast_leg
             ),
         },
         yt_transcript_fetcher=yt_transcript_fetcher,

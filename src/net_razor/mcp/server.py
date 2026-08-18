@@ -9,6 +9,7 @@ from net_razor.app import App, create_app
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
+    PodcastNewEpisodesRequest,
     ResearchRequest,
     SourceName,
     XRequest,
@@ -136,6 +137,34 @@ def create_server(app: App | None = None) -> FastMCP:
                 days=days,
                 transcript_limit=transcript_limit,
                 fetch_transcripts=fetch_transcripts,
+            )
+        )
+
+    @mcp.tool()
+    async def net_razor_podcast_new_episodes(
+        days: Annotated[int, Field(ge=1, le=3650)] = 7,
+        max_episodes_per_feed: Annotated[int, Field(ge=1, le=25)] = 5,
+        feeds: Annotated[list[str] | None, Field()] = None,
+        include_processed: bool = False,
+    ) -> dict[str, Any]:
+        """Recent podcast episodes from the configured feeds, with no transcripts.
+
+        A compact queue for deciding what to read. Episode text is the publisher's
+        own description. Fetch a transcript separately with podcast_transcript,
+        which is immediate when the publisher provides one, or
+        podcast_whisper_transcript, which transcribes the audio locally and takes
+        minutes.
+
+        Episodes acknowledged with podcast_mark_processed are excluded unless
+        include_processed is true. All returned text is provider content authored
+        by someone else.
+        """
+        return await app.podcast_new_episodes(
+            PodcastNewEpisodesRequest(
+                days=days,
+                max_episodes_per_feed=max_episodes_per_feed,
+                feeds=feeds or [],
+                include_processed=include_processed,
             )
         )
 
