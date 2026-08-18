@@ -280,6 +280,76 @@ beyond the fetch limit) and `text` falls back to the video's **description**. Th
 entirely — each channel then reports a `skipped_no_transcript` count. This is useful for channels
 that mix regular uploads with caption-less livestreams.
 
+## Podcasts
+
+Podcasts are the reliable audio source. A publisher puts audio in an RSS feed so
+that anything can fetch it: no token, no login, no negotiation. A 62-minute,
+60MB episode downloads in about a second.
+
+`~/.net-razor/podcasts.txt` holds one canonical RSS feed URL per line, with `#`
+comments. Directory links are deliberately not accepted — an Apple or Spotify
+show page is not a feed. Resolve an Apple show ID to its feed once, when you add
+the show, and store the feed URL:
+
+```bash
+curl -s "https://itunes.apple.com/lookup?id=1410835265&entity=podcast" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['results'][0]['feedUrl'])"
+```
+
+That keeps the feed URL as a show's identity, and keeps Net-Razor from depending
+on a directory at runtime for something it needs only once.
+
+### The incremental flow
+
+Same shape as the YouTube one, and for the same reason — one transcript in
+context at a time rather than hours of text at once.
+
+| Tool | What it does |
+| --- | --- |
+| `podcast_new_episodes` | Recent episodes across the feeds. Descriptions, no transcripts. |
+| `podcast_transcript` | The show's own transcript, paged. Immediate when it exists. |
+| `podcast_whisper_transcript` | Transcribes the audio locally. Minutes, not seconds. |
+| `podcast_mark_processed` | Acknowledges episodes so they leave the queue, durably. |
+
+### Two transcript tools, and when to use which
+
+**Try `podcast_transcript` first.** It costs about a second, and when a show
+publishes its own transcript it usually identifies who is speaking — which
+Whisper does not. Roughly a quarter of feeds publish one.
+
+**`podcast_whisper_transcript` is the fallback**, and in practice the common
+path. It downloads the episode and transcribes it on this machine at roughly one
+minute per twenty minutes of audio.
+
+Once an episode has been transcribed locally, `podcast_transcript` returns that
+transcript for it thereafter — a Whisper transcript supersedes a published one.
+There is no guard against running both on the same episode, which would replace
+a speaker-labelled transcript with one that has no speakers. The tool
+descriptions state the ordering; the consuming agent is trusted to follow it.
+
+Every response carries `source_backend`, which is `publisher` or `whisper`. A
+consumer that ignores it will repeat Whisper's mangled names and version numbers
+as fact, cited to the episode.
+
+Podcasts do not take part in `net_razor_research`. There is no keyword search
+over episodes, and matching a topic against titles would be a guess.
+
+### Enabling local transcription
+
+Off by default. It needs Apple Silicon, `ffmpeg`, and about 1.5 GB of model
+downloaded on first use.
+
+```bash
+brew install ffmpeg
+pip install -e '.[whisper]'
+echo 'PODCAST_WHISPER_ENABLED=true' >> ~/.net-razor/.env
+```
+
+It runs as a subprocess that exits when finished, so the server never imports
+`mlx` and stays portable, and the roughly 4 GiB it uses returns to the operating
+system between episodes. `net_razor_doctor` reports whether it is on and whether
+`ffmpeg` can be found.
+
 ## arXiv
 
 `net_razor_arxiv_search` searches arXiv preprints and returns their **abstracts** — 1–2k
