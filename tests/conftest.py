@@ -125,6 +125,8 @@ def stub_settings(**overrides) -> Settings:
         "youtube_api_key": None,
         # Never the repo's real channels.txt -- tests must not depend on it.
         "channels_file": Path("/nonexistent/channels.txt"),
+        # Same isolation for the podcast feed list.
+        "podcasts_file": Path("/nonexistent/podcasts.txt"),
         "yt_proxy_url": None,
         "yt_search_mode": "broad",
         "yt_digest_only_new": False,

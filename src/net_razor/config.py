@@ -64,6 +64,19 @@ class Settings(BaseSettings):
     # truncated (and flagged). Bounds LLM context regardless of agent/host behavior.
     yt_max_transcript_chars: int = Field(default=40000, ge=0)
 
+    # podcasts
+    podcasts_file: Path = _HOME_ROOT / "podcasts.txt"
+    podcast_max_transcript_chars: int = Field(default=12000, ge=1000)
+    # Off by default: it needs mlx (Apple Silicon only), ffmpeg, and a 1.5 GB model.
+    # When off, podcast_whisper_transcript reports not_configured and nothing else
+    # in the server notices.
+    podcast_whisper_enabled: bool = False
+    podcast_whisper_model: str = "mlx-community/whisper-large-v3-turbo"
+    # The longest configured show is 184 minutes, which measures at 8.3 minutes of
+    # transcription. This is the ceiling before the subprocess is killed, sized so
+    # the consumer's own timeout never fires first.
+    podcast_whisper_timeout_seconds: float = Field(default=900, gt=0)
+
     # shared
     request_timeout_seconds: float = Field(default=30, gt=0)
 
@@ -85,6 +98,11 @@ class Settings(BaseSettings):
     @field_validator("channels_file")
     @classmethod
     def _resolve_channels_file(cls, value: Path) -> Path:
+        return value if value.is_absolute() else _HOME_ROOT / value
+
+    @field_validator("podcasts_file")
+    @classmethod
+    def _resolve_podcasts_file(cls, value: Path) -> Path:
         return value if value.is_absolute() else _HOME_ROOT / value
 
     @field_validator("yt_search_mode")
