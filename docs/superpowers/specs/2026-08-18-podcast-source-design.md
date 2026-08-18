@@ -91,8 +91,8 @@ succeed for roughly 30% of feeds.
 **`podcast_whisper_transcript`** — downloads the episode audio and transcribes it
 locally. Expensive but reliable. Expect this to be the normal path.
 
-Tool names are provisional. The consumer discovers them at runtime and must not
-mirror their schemas.
+Tool names are settled: `podcast_transcript` and `podcast_whisper_transcript`.
+The consumer still discovers them at runtime and must not mirror their schemas.
 
 Discovery and acknowledgement follow the proven YouTube incremental shape:
 a compact new-episodes queue that carries no transcripts, one transcript at a
@@ -122,9 +122,21 @@ Two storage details are load-bearing and were found by reading the YouTube path.
 Both must be handled or the equivalent bug appears here:
 
 **The stored-transcript lookup is source-scoped.** `stored_transcript()` matches
-only rows written with `source = 'yt'`. A podcast source needs its own lookup or a
-generalised one. Without it, paging silently re-fetches from the publisher on
-every page.
+only rows written with `source = 'yt'`, so it will never find a podcast
+transcript. Without a fix, paging silently re-fetches and re-transcribes the
+episode on every page. Nothing errors; the cost just appears.
+
+**Decided 2026-08-18: write a second lookup, leave YouTube's untouched.** Not
+because the code differs much -- it barely does -- but because YouTube is
+scheduled for possible deletion. Sharing code with a source you may remove means
+the removal becomes an untangling instead of a clean break. Generalising also
+drags YouTube's historical quirk into the podcast path, where the digest tool
+nests a transcript inside a larger object while the transcript tool stores it
+plainly, so the lookup checks both shapes. Podcasts have no such history.
+
+If YouTube survives and a third transcript source appears, merge them then, with
+three real examples rather than two guesses. This matches the project's existing
+instinct against premature generality.
 
 **The lookup rejects a language mismatch.** A stored transcript whose
 `language_code` does not satisfy the request is treated as absent. A payload
@@ -280,7 +292,6 @@ because it serves far too much of it.
 
 ## Open items
 
-- The feed list.
-- Final tool names.
-- Whether the stored-transcript lookup is generalised or duplicated per source.
-- Whether `podcasts.txt` supports per-feed overrides the way `channels.txt` does.
+None. Tool names, storage behaviour, the lookup decision, the engine, the
+process model, and the feed list are all settled. The next artifact is an
+implementation plan.
