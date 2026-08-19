@@ -57,6 +57,9 @@ inject a fake transport instead of hitting the network.
 | --- | --- | --- | --- | --- |
 | HN | `sources/hn.py` · `HNSource` | `HttpHNClient` | Algolia HN API | none |
 | arXiv | `sources/arxiv.py` · `ArxivSource` | `HttpArxivClient` | arXiv Atom API | none |
+| Podcast | `sources/podcast/source.py` · `PodcastSource` | `PodcastFeedClient` | publisher RSS feeds | none |
+| Podcast transcript | `sources/podcast/source.py` · `PodcastTranscriptFetcher` | `PodcastFeedClient` | publisher transcript files | none |
+| Podcast Whisper | `sources/podcast/source.py` · `PodcastWhisperFetcher` | `run_whisper` → Python subprocess | local model, no upstream | none |
 | X | `sources/x/source.py` · `XSource` | `BirdXSearchBackend` → Node subprocess | x.com private GraphQL | session cookies |
 | YT search | `sources/yt/source.py` · `YTSource` | `HttpYouTubeSearchClient` | YouTube Data API | API key |
 | YT transcript | `sources/yt/source.py` · `YTTranscriptFetcher` | `YouTubeTranscriptClient` | youtube-transcript-api | none |
@@ -70,6 +73,25 @@ are pure and independently testable.
 The RSS client is a single shared instance: `App` holds it as `yt_discovery`, and
 `YTChannelDigest` holds the same object. That is deliberate — it means an
 `@handle` is resolved to a channel ID at most once per process.
+
+**Podcasts have two transcript paths and one storage slot.** The publisher's own
+transcript is immediate and usually carries speaker labels; local Whisper is slow
+and does not. A Whisper transcript supersedes a published one for the same
+episode, deliberately and without a guard, so `source_backend` on every response
+is the only thing distinguishing them.
+
+Whisper runs as a subprocess that exits rather than an import. `mlx` is Apple
+Silicon only, so importing it would end this project's portability; the
+subprocess also returns its several gigabytes on exit and contains a crash. This
+is the same shape as the vendored Node backend the X source uses, for different
+reasons.
+
+The podcast stored-transcript lookup is a second implementation rather than a
+generalisation of YouTube's. The two barely differ, but YouTube may be removed
+once podcasts prove out, and sharing would turn that removal into an untangling.
+It also does not filter on language: podcasts have no language preference, so
+the condition that makes YouTube's lookup able to silently hide a transcript
+simply does not exist here.
 
 ## The call path
 

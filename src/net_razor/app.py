@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +16,10 @@ from net_razor.logging import configure_json_logging
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
+    PodcastMarkProcessedRequest,
+    PodcastNewEpisodesRequest,
+    PodcastTranscriptRequest,
+    PodcastWhisperTranscriptRequest,
     ResearchRequest,
     ServiceErrorItem,
     SourceName,
@@ -29,6 +34,13 @@ from net_razor.models import (
 from net_razor.sources.arxiv import ArxivSource, HttpArxivClient
 from net_razor.sources.base import Source
 from net_razor.sources.hn import HNSource, HttpHNClient
+from net_razor.sources.podcast.feed_client import PodcastFeedClient
+from net_razor.sources.podcast.feeds import load_feed_urls
+from net_razor.sources.podcast.source import (
+    PodcastSource,
+    PodcastTranscriptFetcher,
+    PodcastWhisperFetcher,
+)
 from net_razor.sources.x import XSource
 from net_razor.sources.x.bird_backend import BirdXSearchBackend
 from net_razor.sources.yt import YTChannelDigest, YTSource, YTTranscriptFetcher
@@ -122,6 +134,15 @@ def _yt_leg(request: ResearchRequest) -> YTRequest:
     )
 
 
+def _podcast_leg(request: ResearchRequest) -> PodcastNewEpisodesRequest:
+    """Exists only to satisfy the registry's shape.
+
+    Podcasts never join a ``research`` fan-out: there is no keyword search over
+    episodes. ``ResearchRequest`` rejects ``"podcast"`` before this is reachable.
+    """
+    raise ValueError("podcast does not participate in research fan-out")
+
+
 def _arxiv_leg(request: ResearchRequest) -> ArxivRequest:
     # arXiv announces on weekdays only, so a research window of a day or two finds
     # nothing. Widen just this leg -- the effective window is echoed back per source.
@@ -144,6 +165,8 @@ class App:
     recorder: AuditRecorder
     sources: dict[SourceName, SourceEntry]
     yt_transcript_fetcher: YTTranscriptFetcher
+    podcast_transcript_fetcher: PodcastTranscriptFetcher
+    podcast_whisper_fetcher: PodcastWhisperFetcher
     yt_channel_digest_source: YTChannelDigest
     yt_discovery: YouTubeRssClient
 
@@ -315,6 +338,119 @@ class App:
             return response
 
     # -- lightweight discovery (the incremental work queue) ------------------
+    def _stored_podcast_transcript(
+        self, request: PodcastTranscriptRequest
+    ) -> dict[str, Any] | None:
+        """Read back a transcript already stored for this episode, if there is one.
+
+        The store lookup lives here rather than in the source, because sources must
+        not touch the audit store. A miss is not an error -- the source fetches.
+        """
+        return self.store.stored_podcast_transcript(request.episode_id)
+
+    async def podcast_transcript(self, request: PodcastTranscriptRequest) -> dict[str, Any]:
+        max_chars = (
+            request.max_chars
+            if request.max_chars is not None
+            else self.settings.podcast_max_transcript_chars
+        )
+        async with self.recorder.call(
+            tool="podcast_transcript", source="podcast",
+            request=request.model_dump(mode="json"),
+        ) as call:
+            result = await self.podcast_transcript_fetcher.transcript(
+                request, max_chars=max_chars, cached=self._stored_podcast_transcript(request)
+            )
+            call.record(
+                effective_request=result.effective_request,
+                items=result.items,
+                raw=result.raw,
+                errors=result.errors,
+            )
+            response = {"call_id": call.id, **result.meta["response"]}
+            call.set_response(response)
+            return response
+
+    async def podcast_whisper_transcript(
+        self, request: PodcastWhisperTranscriptRequest
+    ) -> dict[str, Any]:
+        """Transcribe an episode's audio locally. Minutes, not seconds."""
+        max_chars = (
+            request.max_chars
+            if request.max_chars is not None
+            else self.settings.podcast_max_transcript_chars
+        )
+        lookup = PodcastTranscriptRequest(
+            episode_id=request.episode_id, feed_url=request.feed_url
+        )
+        async with self.recorder.call(
+            tool="podcast_whisper_transcript", source="podcast",
+            request=request.model_dump(mode="json"),
+        ) as call:
+            result = await self.podcast_whisper_fetcher.transcript(
+                lookup.model_copy(update={"offset": request.offset}),
+                max_chars=max_chars,
+                cached=self._stored_podcast_transcript(lookup),
+            )
+            call.record(
+                effective_request=result.effective_request,
+                items=result.items,
+                raw=result.raw,
+                errors=result.errors,
+            )
+            response = {"call_id": call.id, **result.meta["response"]}
+            call.set_response(response)
+            return response
+
+    async def podcast_new_episodes(self, request: PodcastNewEpisodesRequest) -> dict[str, Any]:
+        """Recent episodes, minus the ones already acknowledged.
+
+        The filter lives here rather than in the source: the source stays pure and
+        audit-unaware, and acknowledgement state belongs to the store.
+        """
+        response = await self._search_tool(
+            "podcast_new_episodes", self.sources["podcast"].source, request
+        )
+        if request.include_processed:
+            return response
+        processed = self.store.processed_podcast_episode_ids()
+        response["items"] = [
+            item for item in response["items"] if item["source_id"] not in processed
+        ]
+        return response
+
+    async def podcast_mark_processed(
+        self, request: PodcastMarkProcessedRequest
+    ) -> dict[str, Any]:
+        """Acknowledge episodes only after their downstream work succeeds."""
+        async with self.recorder.call(
+            tool="podcast_mark_processed", source="podcast",
+            request=request.model_dump(mode="json"),
+        ) as call:
+            acknowledged, unknown = self.store.acknowledge_podcast_transcripts(
+                transcript_call_ids=request.call_ids,
+                acknowledgement_call_id=call.id,
+                now=self.clock.now().isoformat(),
+            )
+            errors = [
+                ServiceErrorItem(
+                    type="unknown_call_id",
+                    message=f"No podcast transcript call found for {call_id}",
+                )
+                for call_id in unknown
+            ]
+            call.record(
+                effective_request=request.model_dump(mode="json"),
+                items=[], raw={}, errors=errors,
+            )
+            response = {
+                "call_id": call.id,
+                "acknowledged": acknowledged,
+                "errors": [error.model_dump(mode="json") for error in errors],
+            }
+            call.set_response(response)
+            return response
+
     async def yt_new_videos(self, request: YTNewVideosRequest) -> dict[str, Any]:
         async with self.recorder.call(
             tool="yt_new_videos", source="yt", request=request.model_dump(mode="json")
@@ -613,6 +749,24 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
     yt_channel_digest_source = YTChannelDigest(
         discovery=rss_discovery, transcript_client=transcript_client
     )
+    podcast_feed_client = PodcastFeedClient(
+        timeout_seconds=resolved.request_timeout_seconds
+    )
+    podcast_source = PodcastSource(
+        feed_client=podcast_feed_client,
+        configured_feeds=load_feed_urls(resolved.podcasts_file),
+    )
+    podcast_transcript_fetcher = PodcastTranscriptFetcher(feed_client=podcast_feed_client)
+    podcast_whisper_fetcher = PodcastWhisperFetcher(
+        feed_client=podcast_feed_client,
+        enabled=resolved.podcast_whisper_enabled,
+        model=resolved.podcast_whisper_model,
+        timeout_seconds=resolved.podcast_whisper_timeout_seconds,
+        # This interpreter: the worker lives in this package and needs its imports.
+        executable=sys.executable,
+        max_audio_bytes=resolved.podcast_max_audio_bytes,
+        download_timeout_seconds=resolved.podcast_audio_timeout_seconds,
+    )
 
     return App(
         settings=resolved,
@@ -628,8 +782,13 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
             "arxiv": SourceEntry(
                 source=arxiv_source, label="arXiv", build_request=_arxiv_leg
             ),
+            "podcast": SourceEntry(
+                source=podcast_source, label="Podcasts", build_request=_podcast_leg
+            ),
         },
         yt_transcript_fetcher=yt_transcript_fetcher,
+        podcast_transcript_fetcher=podcast_transcript_fetcher,
+        podcast_whisper_fetcher=podcast_whisper_fetcher,
         yt_channel_digest_source=yt_channel_digest_source,
         yt_discovery=rss_discovery,
     )

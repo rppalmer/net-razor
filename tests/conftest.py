@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from net_razor.app import App, SourceEntry, _arxiv_leg, _hn_leg, _x_leg, _yt_leg
+from net_razor.app import App, SourceEntry, _arxiv_leg, _hn_leg, _podcast_leg, _x_leg, _yt_leg
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import FixedClock, ResolvedWindow
@@ -48,7 +48,8 @@ def make_app(store, clock):
     """Factory building an App wired with fake sources."""
 
     def _make(
-        *, x=None, hn=None, yt=None, arxiv=None, yt_transcript=None, yt_digest=None,
+        *, x=None, hn=None, yt=None, arxiv=None, podcast=None, yt_transcript=None,
+        podcast_transcript=None, podcast_whisper=None, yt_digest=None,
         yt_discovery=None, settings=None,
     ) -> App:
         return App(
@@ -73,8 +74,16 @@ def make_app(store, clock):
                     source=arxiv or RecordingSource("arxiv", FetchResult.empty({})),
                     label="arXiv", build_request=_arxiv_leg,
                 ),
+                "podcast": SourceEntry(
+                    source=podcast or RecordingSource("podcast", FetchResult.empty({})),
+                    label="Podcasts", build_request=_podcast_leg,
+                ),
             },
             yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
+            podcast_transcript_fetcher=podcast_transcript or _StubPodcastTranscriptFetcher(),
+            podcast_whisper_fetcher=podcast_whisper or _StubPodcastWhisperFetcher(
+                enabled=(settings or stub_settings()).podcast_whisper_enabled
+            ),
             yt_channel_digest_source=yt_digest or _StubDigest(),
             yt_discovery=yt_discovery or _StubDiscovery(),
         )
@@ -98,6 +107,72 @@ class _StubDigest:
 
     async def fetch(self, leg, window):
         return FetchResult.empty({})
+
+
+class _StubPodcastTranscriptFetcher:
+    """Serves whatever App read from the store; never goes upstream."""
+
+    async def transcript(self, request, *, max_chars, cached):
+        from net_razor.models import TranscriptSegment
+        from net_razor.sources.podcast.source import (
+            _transcript_error,
+            build_transcript_result,
+        )
+
+        effective = {"episode_id": request.episode_id, "feed_url": request.feed_url,
+                     "offset": request.offset, "max_chars": max_chars}
+        if cached is None:
+            return _transcript_error(
+                effective, request, "no_transcript_found",
+                "This feed publishes no transcript for that episode. Use "
+                "podcast_whisper_transcript to transcribe the audio locally.",
+            )
+        return build_transcript_result(
+            request,
+            segments=[TranscriptSegment(**s) for s in cached["segments"]],
+            language=cached.get("language"),
+            language_code=cached.get("language_code"),
+            backend=cached.get("source_backend") or "publisher",
+            max_chars=max_chars, effective=effective, store_raw=False,
+        )
+
+
+class _StubPodcastWhisperFetcher:
+    """Whisper without a model: serves the store, else reports why it cannot run.
+
+    Never launches a subprocess, so no test loads a model or transcribes audio.
+    """
+
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled
+
+    async def transcript(self, request, *, max_chars, cached):
+        from net_razor.models import TranscriptSegment
+        from net_razor.sources.podcast.source import (
+            _transcript_error,
+            build_transcript_result,
+        )
+
+        effective = {"episode_id": request.episode_id, "feed_url": request.feed_url,
+                     "offset": request.offset, "max_chars": max_chars}
+        if cached is not None:
+            return build_transcript_result(
+                request,
+                segments=[TranscriptSegment(**s) for s in cached["segments"]],
+                language=cached.get("language"),
+                language_code=cached.get("language_code"),
+                backend=cached.get("source_backend") or "whisper",
+                max_chars=max_chars, effective=effective, store_raw=False,
+            )
+        if not self.enabled:
+            return _transcript_error(
+                effective, request, "not_configured",
+                "Local transcription is disabled.", backend="whisper",
+            )
+        return _transcript_error(
+            effective, request, "transcription_failed",
+            "stub fetcher does not transcribe", backend="whisper",
+        )
 
 
 class _StubDiscovery:
@@ -125,6 +200,8 @@ def stub_settings(**overrides) -> Settings:
         "youtube_api_key": None,
         # Never the repo's real channels.txt -- tests must not depend on it.
         "channels_file": Path("/nonexistent/channels.txt"),
+        # Same isolation for the podcast feed list.
+        "podcasts_file": Path("/nonexistent/podcasts.txt"),
         "yt_proxy_url": None,
         "yt_search_mode": "broad",
         "yt_digest_only_new": False,

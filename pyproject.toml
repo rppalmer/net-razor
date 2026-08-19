@@ -21,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Apple Silicon only. Used solely by the podcast Whisper subprocess, which the
+# server never imports. ffmpeg must also be on PATH.
+whisper = [
+    "mlx-whisper>=0.4",
+]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",

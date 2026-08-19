@@ -9,6 +9,7 @@ from typing import Any
 
 from net_razor.audit.store import AuditStore
 from net_razor.config import Settings
+from net_razor.sources.podcast.feeds import load_feed_urls
 
 
 def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, Any]:
@@ -20,8 +21,38 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
 
     storage_check = _check_storage(database_path, database_parent)
     x_node_path = shutil.which(settings.node_binary)
+    podcast_feeds = load_feed_urls(settings.podcasts_file)
+    ffmpeg_path = shutil.which("ffmpeg")
     checks = [
         storage_check,
+        {
+            "name": "podcast_feeds_configured",
+            "ok": bool(podcast_feeds),
+            "severity": "warning",
+            "message": (
+                f"{len(podcast_feeds)} podcast feeds configured in "
+                f"{settings.podcasts_file}."
+                if podcast_feeds
+                else f"No podcast feeds. Add RSS feed URLs to {settings.podcasts_file}."
+            ),
+        },
+        {
+            # Only a problem when transcription is switched on: with it off, the
+            # tool refuses cleanly and nothing else needs ffmpeg.
+            "name": "podcast_whisper_ready",
+            "ok": (not settings.podcast_whisper_enabled) or ffmpeg_path is not None,
+            "severity": "warning",
+            "message": (
+                "Local transcription is off."
+                if not settings.podcast_whisper_enabled
+                else (
+                    f"Local transcription is on, using {settings.podcast_whisper_model}."
+                    if ffmpeg_path
+                    else "Local transcription is on but ffmpeg is not on PATH; "
+                    "transcription will fail until it is installed."
+                )
+            ),
+        },
         {
             "name": "x_credentials_configured",
             "ok": settings.x_credentials_configured,
