@@ -99,3 +99,112 @@ def test_the_server_does_not_import_mlx():
         capture_output=True, text=True, check=True,
     )
     assert result.stdout.strip() == "False"
+
+
+async def test_whisper_returns_a_stored_publisher_transcript_rather_than_re_transcribing(
+    make_app, store, clock
+):
+    """First writer wins, not last.
+
+    Both transcript tools check the store before doing any work, and the lookup
+    returns the newest payload whatever produced it. So calling Whisper on an
+    episode that already has a publisher transcript returns that publisher
+    transcript -- it does not overwrite it, and it spends no CPU.
+
+    The real consequence is about ordering on a *fresh* episode: whichever tool
+    runs first decides what every later call gets. Calling Whisper first does not
+    clobber anything; it forecloses ever fetching the publisher's version.
+    """
+    store.open_call(call_id="seed", parent_id=None, tool="seed", source="podcast",
+                    request={}, created_at=clock.now().isoformat())
+    store.record_payload(
+        call_id="seed", source="podcast", effective_request={}, items=[],
+        raw={"ep-1": {
+            "language": "en", "language_code": "en", "source_backend": "publisher",
+            "segment_count": 1,
+            "segments": [
+                TranscriptSegment(text="Speaker: hello.", start=0.0, duration=1.0).model_dump(
+                    mode="json")
+            ],
+        }},
+        errors=[], created_at=clock.now().isoformat(),
+    )
+    app = make_app(settings=stub_settings(podcast_whisper_enabled=True))
+
+    response = await app.podcast_whisper_transcript(
+        PodcastWhisperTranscriptRequest(episode_id="ep-1", feed_url="https://e.com/f.rss")
+    )
+
+    assert response["source_backend"] == "publisher"
+    assert response["from_cache"] is True
+    assert response["text"] == "Speaker: hello."
+
+
+async def test_mark_processed_accepts_a_call_id_from_either_transcript_tool(
+    make_app, store, clock
+):
+    """A consumer passes whichever tool succeeded; both must resolve identically."""
+    from net_razor.models import PodcastMarkProcessedRequest
+
+    store.open_call(call_id="seed", parent_id=None, tool="seed", source="podcast",
+                    request={}, created_at=clock.now().isoformat())
+    store.record_payload(
+        call_id="seed", source="podcast", effective_request={}, items=[],
+        raw={"ep-1": {
+            "language": "en", "language_code": "en", "source_backend": "whisper",
+            "segment_count": 1,
+            "segments": [
+                TranscriptSegment(text="Hi.", start=0.0, duration=1.0).model_dump(mode="json")
+            ],
+        }},
+        errors=[], created_at=clock.now().isoformat(),
+    )
+    app = make_app(settings=stub_settings(podcast_whisper_enabled=True))
+
+    whisper_call = await app.podcast_whisper_transcript(
+        PodcastWhisperTranscriptRequest(episode_id="ep-1", feed_url="https://e.com/f.rss")
+    )
+    acknowledged = await app.podcast_mark_processed(
+        PodcastMarkProcessedRequest(call_ids=[whisper_call["call_id"]])
+    )
+
+    assert acknowledged["acknowledged"] == 1
+    assert store.processed_podcast_episode_ids() == {"ep-1"}
+
+
+async def test_paging_after_a_whisper_transcript_keeps_reporting_whisper(
+    make_app, store, clock
+):
+    """Later pages come from the store, and must not claim a different backend."""
+    from net_razor.models import PodcastTranscriptRequest
+
+    segments = [
+        TranscriptSegment(text=f"Line {n} of the transcript.", start=float(n), duration=1.0)
+        for n in range(200)
+    ]
+    store.open_call(call_id="seed", parent_id=None, tool="seed", source="podcast",
+                    request={}, created_at=clock.now().isoformat())
+    store.record_payload(
+        call_id="seed", source="podcast", effective_request={}, items=[],
+        raw={"ep-1": {
+            "language": "en", "language_code": "en", "source_backend": "whisper",
+            "segment_count": len(segments),
+            "segments": [s.model_dump(mode="json") for s in segments],
+        }},
+        errors=[], created_at=clock.now().isoformat(),
+    )
+    app = make_app(settings=stub_settings(podcast_whisper_enabled=True))
+
+    first = await app.podcast_transcript(
+        PodcastTranscriptRequest(episode_id="ep-1", feed_url="https://e.com/f.rss", max_chars=1000)
+    )
+    second = await app.podcast_transcript(
+        PodcastTranscriptRequest(
+            episode_id="ep-1", feed_url="https://e.com/f.rss",
+            max_chars=1000, offset=first["next_offset"],
+        )
+    )
+
+    assert first["source_backend"] == "whisper"
+    assert second["source_backend"] == "whisper"
+    assert second["from_cache"] is True

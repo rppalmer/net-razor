@@ -74,3 +74,30 @@ async def test_follows_redirects_because_feeds_route_audio_through_trackers(tmp_
         transport=_transport(handler),
     )
     assert destination.read_bytes() == b"real-audio"
+
+
+async def test_a_download_that_trickles_forever_is_bounded_by_a_total_budget(tmp_path: Path):
+    """httpx only limits the gap between chunks, so a slow-but-alive server would
+    otherwise stream indefinitely. A scheduled job needs a real ceiling, and the
+    consumer computes its own timeout from these values."""
+    import asyncio
+
+    async def slow_body():
+        while True:
+            yield b"x" * 16
+            await asyncio.sleep(0.01)
+
+    async def slow_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=slow_body())
+
+    with pytest.raises(AudioDownloadError) as excinfo:
+        await download_audio(
+            "https://cdn.example.com/1.mp3",
+            destination=tmp_path / "e.mp3",
+            timeout_seconds=0.2,
+            max_bytes=10_000_000,
+            transport=httpx.MockTransport(slow_handler),
+        )
+
+    assert excinfo.value.error_type == "timeout"
+    assert not (tmp_path / "e.mp3").exists()

@@ -321,11 +321,17 @@ Whisper does not. Roughly a quarter of feeds publish one.
 path. It downloads the episode and transcribes it on this machine at roughly one
 minute per twenty minutes of audio.
 
-Once an episode has been transcribed locally, `podcast_transcript` returns that
-transcript for it thereafter — a Whisper transcript supersedes a published one.
-There is no guard against running both on the same episode, which would replace
-a speaker-labelled transcript with one that has no speakers. The tool
-descriptions state the ordering; the consuming agent is trusted to follow it.
+**Whichever tool runs first wins, permanently.** Both check the store before
+doing any work, so once an episode has a transcript, every later call to either
+tool returns that one. Calling Whisper on an episode that already has a
+publisher transcript costs nothing and returns the publisher's — it does not
+overwrite anything.
+
+The consequence is about ordering on a *fresh* episode. Running Whisper first
+does not clobber a stored transcript; it forecloses ever fetching the
+publisher's better one. So try `podcast_transcript` first, and reach for Whisper
+only when it reports `no_transcript_found`. There is deliberately no guard
+enforcing that; the tool descriptions state it and the consumer is trusted.
 
 Every response carries `source_backend`, which is `publisher` or `whisper`. A
 consumer that ignores it will repeat Whisper's mangled names and version numbers
@@ -349,6 +355,14 @@ It runs as a subprocess that exits when finished, so the server never imports
 `mlx` and stays portable, and the roughly 4 GiB it uses returns to the operating
 system between episodes. `net_razor_doctor` reports whether it is on and whether
 `ffmpeg` can be found.
+
+**A consumer's timeout must clear the sum of three caps**, since one
+`podcast_whisper_transcript` call does a feed fetch, then a download, then a
+transcription, each with its own budget: `REQUEST_TIMEOUT_SECONDS` (30) plus
+`PODCAST_AUDIO_TIMEOUT_SECONDS` (300) plus `PODCAST_WHISPER_TIMEOUT_SECONDS`
+(900), so **1230 seconds** with the defaults. Below that, a consumer abandons
+calls this server is still working on correctly, and gets a dead session instead
+of a classified error it could act on.
 
 ## arXiv
 

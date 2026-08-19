@@ -74,11 +74,18 @@ The RSS client is a single shared instance: `App` holds it as `yt_discovery`, an
 `YTChannelDigest` holds the same object. That is deliberate — it means an
 `@handle` is resolved to a channel ID at most once per process.
 
-**Podcasts have two transcript paths and one storage slot.** The publisher's own
-transcript is immediate and usually carries speaker labels; local Whisper is slow
-and does not. A Whisper transcript supersedes a published one for the same
-episode, deliberately and without a guard, so `source_backend` on every response
-is the only thing distinguishing them.
+**Podcasts have two transcript paths and one storage slot, and the first writer
+wins.** The publisher's own transcript is immediate and usually carries speaker
+labels; local Whisper is slow and does not. Both tools read the store before
+doing any work, so whichever produces a transcript first is what every later call
+to either tool returns. `source_backend` on every response is the only thing
+distinguishing them.
+
+This is safer than the "Whisper supersedes" rule originally specified, and it is
+what the code does: an accidental Whisper call on an episode that already has a
+publisher transcript costs nothing and preserves the better text. What ordering
+still decides is the *fresh* case -- running Whisper first forecloses ever
+fetching the publisher's version.
 
 Whisper runs as a subprocess that exits rather than an import. `mlx` is Apple
 Silicon only, so importing it would end this project's portability; the

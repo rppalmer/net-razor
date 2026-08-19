@@ -98,25 +98,34 @@ Discovery and acknowledgement follow the proven YouTube incremental shape:
 a compact new-episodes queue that carries no transcripts, one transcript at a
 time, and a durable acknowledgement after downstream work succeeds.
 
-## Storage: Whisper wins when present
+## Storage: first writer wins
 
-Decided deliberately. A Whisper transcript for an episode supersedes a publisher
-transcript for the same episode, and later reads return the Whisper one.
+**Corrected 2026-08-19, after ORIS reviewed the implementation.** This section
+originally specified "Whisper wins when present". The code does something else,
+and the something else is better, so the code stands and this is the record of
+why.
 
-The consequence, accepted knowingly: once Whisper has run, the publisher version
-is no longer reachable through any tool. It remains in the audit store and can be
-recovered with SQL. Comparing the two versions is not a supported operation.
+Both transcript tools read the store before doing any work. So whichever tool
+produces a transcript for an episode first is what every later call to either
+tool returns. Calling Whisper on an episode that already has a publisher
+transcript returns the publisher's, spends no CPU, and overwrites nothing.
+
+The consequence, accepted knowingly: once either transcript is stored, the other
+is never fetched. Comparing the two versions is not a supported operation.
+
+The ordering risk is therefore about *fresh* episodes only. Running Whisper first
+does not clobber anything; it forecloses ever getting the publisher's better
+version. Try the publisher tool first and fall back on `no_transcript_found`.
 
 **This has a sharp edge, and it is accepted.** Running Whisper on an episode that
 already had a publisher transcript destroys the speaker labels, replacing a
 better transcript with a worse one. The agent should not call Whisper when it
 already has the free transcript, and that cannot be guaranteed.
 
-**Decided 2026-08-18: do not design around it.** No deduplication, no guard that
-refuses to overwrite, no "already transcribed" check. The risk does not justify
-the machinery. The tool descriptions state the ordering and the cost; the
-consuming agent is trusted to act on them, and a wasted transcription costs three
-minutes of CPU on an idle machine.
+**Decided 2026-08-18: do not design around it.** No deduplication, no guard, no
+"already transcribed" check. As it turns out the store-first read makes the
+accidental case free anyway: a stray Whisper call on an episode that already has
+a transcript returns the stored one rather than spending three minutes of CPU.
 
 Two storage details are load-bearing and were found by reading the YouTube path.
 Both must be handled or the equivalent bug appears here:

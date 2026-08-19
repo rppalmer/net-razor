@@ -9,6 +9,7 @@ inspected, parsed, or executed here -- it is bytes on the way to a transcriber.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import httpx
@@ -36,7 +37,40 @@ async def download_audio(
     max_bytes: int,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> int:
-    """Stream ``url`` into ``destination``. Returns bytes written."""
+    """Stream ``url`` into ``destination``, within a total time budget.
+
+    ``timeout_seconds`` bounds the *whole* download, not each read. httpx's own
+    timeout only limits the gap between chunks, so a server trickling bytes
+    slowly enough never trips it and a 170MB episode could stream for hours. A
+    scheduled job needs a real ceiling, and a consumer needs to be able to
+    compute one from the configured values.
+    """
+    try:
+        return await asyncio.wait_for(
+            _stream_to_file(
+                url,
+                destination=destination,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+                transport=transport,
+            ),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        destination.unlink(missing_ok=True)
+        raise AudioDownloadError(
+            "timeout", f"The episode audio exceeded {timeout_seconds:.0f} seconds"
+        ) from exc
+
+
+async def _stream_to_file(
+    url: str,
+    *,
+    destination: Path,
+    timeout_seconds: float,
+    max_bytes: int,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> int:
     written = 0
     try:
         async with httpx.AsyncClient(
