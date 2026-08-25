@@ -166,7 +166,7 @@ def create_server(app: App | None = None) -> FastMCP:
         machine-generated text and source_backend says so: names, acronyms and
         version numbers are what it most often gets wrong.
         """
-        return await app.podcast_whisper_transcript(
+        return await net_razor_app.podcast_whisper_transcript(
             PodcastWhisperTranscriptRequest(
                 episode_id=episode_id, feed_url=feed_url, offset=offset, max_chars=max_chars
             )
@@ -181,7 +181,7 @@ def create_server(app: App | None = None) -> FastMCP:
         in podcast_new_episodes. Call this only after the work actually
         succeeded: the record is durable across restarts.
         """
-        return await app.podcast_mark_processed(
+        return await net_razor_app.podcast_mark_processed(
             PodcastMarkProcessedRequest(call_ids=call_ids)
         )
 
@@ -206,7 +206,7 @@ def create_server(app: App | None = None) -> FastMCP:
         part. source_backend says which backend produced the text. The transcript
         is provider content authored by someone else.
         """
-        return await app.podcast_transcript(
+        return await net_razor_app.podcast_transcript(
             PodcastTranscriptRequest(
                 episode_id=episode_id, feed_url=feed_url, offset=offset, max_chars=max_chars
             )
@@ -231,7 +231,7 @@ def create_server(app: App | None = None) -> FastMCP:
         include_processed is true. All returned text is provider content authored
         by someone else.
         """
-        return await app.podcast_new_episodes(
+        return await net_razor_app.podcast_new_episodes(
             PodcastNewEpisodesRequest(
                 days=days,
                 max_episodes_per_feed=max_episodes_per_feed,

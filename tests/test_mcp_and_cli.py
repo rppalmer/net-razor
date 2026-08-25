@@ -160,3 +160,74 @@ async def test_cli_yt_transcript_dispatches_with_offset(make_app, capsys):
     assert exit_code == 0
     assert fetcher.offsets == [120]
     assert "dQw4w9WgXcQ" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Application resolution
+# --------------------------------------------------------------------------- #
+# Four podcast tools shipped closing over create_server's `app` parameter rather
+# than the resolved application. Every real MCP client calls create_server() with
+# no argument, so `app` was None and all four failed on invocation. Every test
+# passed, because every test handed an App in. These two tests cover that path.
+@pytest.mark.asyncio
+async def test_every_tool_resolves_the_application_create_server_built(monkeypatch, make_app):
+    """create_server() with no argument must give every tool a working application.
+
+    This is the path every MCP host takes and the only one where a tool closing
+    over the wrong variable shows up.
+    """
+    import net_razor.mcp.server as server_module
+
+    built = make_app()
+    monkeypatch.setattr(server_module, "create_app", lambda: built)
+
+    server = server_module.create_server()  # no argument, as main() does
+    tools = await server.list_tools()
+
+    failed: list[str] = []
+    for tool in tools:
+        try:
+            await server.call_tool(tool.name, _minimal_arguments(tool))
+        except Exception as exc:  # noqa: BLE001 - the failure text is the assertion
+            if "'NoneType' object has no attribute" in str(exc):
+                failed.append(tool.name)
+    assert failed == []
+
+
+def _minimal_arguments(tool) -> dict:
+    """Just enough to reach the tool body: required strings get a placeholder."""
+    schema = tool.inputSchema or {}
+    required = schema.get("required") or []
+    properties = schema.get("properties") or {}
+    arguments: dict = {}
+    for name in required:
+        kind = (properties.get(name) or {}).get("type")
+        if kind == "integer":
+            arguments[name] = 1
+        elif kind == "array":
+            arguments[name] = ["x"]
+        elif kind == "boolean":
+            arguments[name] = False
+        else:
+            arguments[name] = "x"
+    return arguments
+
+
+def test_no_tool_body_closes_over_the_unresolved_app_parameter():
+    """A structural guard, cheap enough to keep alongside the behavioural one.
+
+    create_server takes `app` and resolves it into `net_razor_app`. A tool body
+    referencing the parameter directly is the bug above, and it is invisible to
+    any test that supplies an application.
+    """
+    from pathlib import Path
+
+    import net_razor.mcp.server as server_module
+
+    source = Path(server_module.__file__).read_text()
+    offenders = [
+        line.strip()
+        for line in source.splitlines()
+        if "await app." in line or "return app." in line
+    ]
+    assert offenders == []
