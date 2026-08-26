@@ -13,8 +13,8 @@ class Source(Protocol):
 
     1. **Never touch the audit store.** Recording is the wrapper's job. A source
        that reads or writes the trail makes the audit boundary a lie, and makes
-       the source untestable without a database. (``yt_transcript`` reads stored
-       transcripts, but ``App`` does the lookup and passes the result in.)
+       the source untestable without a database. (``podcast_transcript`` reads
+       stored transcripts, but ``App`` does the lookup and passes the result in.)
     2. **Never read the wall clock for time-window logic.** The window arrives
        resolved. Identical inputs plus an identical window must produce identical
        upstream calls, which is what "deterministic" means here.

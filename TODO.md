@@ -438,85 +438,15 @@ now point `channels_file` at a nonexistent path, with a guard test asserting it.
 
 ## Roadmap — not scheduled
 
-### R1 · Whisper fallback for caption-less videos — **dropped, measured**
+### R1 · Whisper fallback for caption-less videos — **closed, superseded by R5**
 
-**Measured 2026-08-18. The answer is no.** Four caption failures in the entire
-audit history, all `transcripts_disabled`; `no_transcript_found` has never fired
-once. Two are identifiable videos. The other two are digest calls against the
-same channel seven minutes apart on one day, so almost certainly one video
-counted twice. Two to four distinct videos lost since 2026-07-07.
+Measured 2026-08-18 and dropped: four caption failures in the entire audit
+history, all from one already-removed channel. Then it stopped mattering
+entirely — YouTube audio could not be downloaded at all (four videos, every
+format, five player clients, HTTP 403 on every media fetch with yt-dlp current),
+and R5 moved the whole idea to podcast audio, which has none of that.
 
-The gate written here beforehand was "four videos from one livestream channel,
-drop the idea." That is what the data says, so it is dropped.
-
-**The sample is thin, and honestly so.** Calls cluster into three weeks with
-empty weeks between them — hand-driven development traffic, not a nightly job
-running steadily. Thirty-seven transcript-fetching calls in total, twenty-six of
-them during a single week of testing. Re-run the count after a month of the
-scheduled job genuinely running:
-
-```sql
-SELECT json_extract(error_json,'$.type'), COUNT(*) FROM errors
-WHERE json_extract(error_json,'$.type')
-      IN ('transcripts_disabled','no_transcript_found');
-```
-
-Single digits after that means this stays dropped for good. The notes below are
-kept so the reasoning is not re-derived from scratch. The simplest viable
-version would still need **no MCP server changes at all** — a transcript written
-into the audit store by any means is already served by `yt_transcript`, paged and
-cached (verified against a scratch database).
-
-**Shape.** Audio only (`yt-dlp -f bestaudio`) — roughly a tenth of the data of a
-full download, and Whisper ignores the video track anyway. Then a local Whisper
-implementation.
-
-> **This no longer works, tested 2026-08-18.** Four videos, every audio format,
-> five player clients: HTTP 403 on every media fetch, with yt-dlp current.
-> YouTube requires a proof-of-origin token only a real browser produces, the
-> media URL carries a scrambled parameter needing YouTube's own JavaScript to
-> unscramble, and some formats are moving to a streaming model that exposes no
-> file URL at all. The workarounds are executing internet-fetched JavaScript at
-> runtime, or authenticating with the operator's Google account. Do not re-attempt
-> this without reading R5, which moved the whole idea to podcast audio instead.
-
-**It cannot be a synchronous tool — with one caveat found later.** A 40-minute
-video is realistically 4–10 minutes of CPU, and a generic MCP host gives up
-around 60 seconds. But the only consumer is ORIS, which launches this server
-itself and sets its own read timeout in its client config. A blocking call is
-therefore workable *there*, and the job shape below is not forced. For a generic
-host it still is:
-
-```
-yt_request_transcription(video_id)  → returns immediately, "queued"
-    …background work, result lands in the store…
-yt_transcript(url)                  → picks it up on the next call
-```
-
-The agent asks, moves on, and finds the text waiting on a later run. For a
-nightly digest that's ideal — the queue fills during the day and drains
-overnight.
-
-**Do T2 and T9 first.** A Whisper-produced transcript then lands in exactly the
-same table and is served by the same tool with the same paging. It must still be
-*distinguishable* — see the `source_backend` contract in the README. A consumer
-that cannot tell will repeat Whisper's mangled names and version numbers as
-fact, cited to the video.
-
-Two storage details would bite whoever builds this. `stored_transcript()` matches
-only rows written with `source = 'yt'`, and the lookup above it rejects any
-stored transcript whose `language_code` does not satisfy the request. A payload
-written with a null or non-standard language code is invisible to
-`yt_transcript`, which then goes back to YouTube and fails again with the same
-caption error — silently, with nothing explaining why.
-
-**Costs, honestly.** `yt-dlp` (which updates constantly, because it must), a
-Whisper implementation, a model file of a few hundred MB to a few GB, temp audio,
-minutes of CPU per video, and genuinely new failure modes — download blocked,
-disk full, model missing, process killed mid-run. Downloading is also a greyer
-area than reading published captions. Keep it in its own module behind a config
-flag defaulting to off, so when `yt-dlp` breaks — and it will, periodically —
-nothing else notices.
+Closed for good on 2026-08-26 when YouTube was removed.
 
 ### R2 · Reddit — **blocked, not scheduled**
 
@@ -549,7 +479,7 @@ Removed rather than parked, so it stops reading like a plan. Two reasons:
   would be numeric market data forced through a text-evidence model.
 - **It needs the editorial layer this project refuses to have.** Deciding which
   markets are "related to a topic" is a scoring judgement, which is exactly what
-  design principle 4 rules out.
+  design principle 5 rules out.
 
 It is a different product. If the "what changed recently?" signal is ever wanted,
 it belongs somewhere else.
@@ -562,31 +492,16 @@ did not apply. That premise was wrong: the goal is for **any MCP host** to drive
 this, an IDE extension or Claude Code as readily as an agent framework.
 
 With more than one consumer the calculus flips entirely, and the containment
-argument (a Node subprocess and blocking transcript threads live in a process an
-agent can kill) still holds on top of it. Rationale is now written into the
-README under "Why MCP, and not just a Python library?", so it does not have to be
-re-derived.
+argument (a Node subprocess lives in a process an agent can kill) still holds on
+top of it. Rationale is written into the README under "Why MCP, and not just a
+Python library?", so it does not have to be re-derived.
 
-The costs are accepted knowingly: a schema hop at the boundary, and a dependency
-on the launching host's environment — which is why `NODE_BINARY` sometimes needs
-an absolute path.
+### R5 · Podcasts with local Whisper — ✅ **shipped**
 
-### R5 · Podcasts with local Whisper — **designed, not built**
-
-Dropped on 2026-08-18 and revived the same day with a different design, because
-the reason for dropping it stopped being true within hours.
-
-**Why it came back.** It was dropped partly because it needed a paid third party
-(Taddy) for transcripts. Then R1's Whisper work hit a wall: YouTube audio can no
-longer be downloaded at all. Four videos, every format, five player clients, HTTP
-403 on every media fetch, with yt-dlp current. The workarounds are executing
-JavaScript fetched from the internet at runtime — the inverse of this project's
-trust rule — or authenticating downloads with the operator's Google account.
-
-Podcast RSS has none of that. Ten feeds checked, ten expose a plain audio URL; a
-62-minute episode downloaded in 1.1 seconds unauthenticated. And with local
-Whisper the Taddy dependency disappears, because we need the audio rather than
-somebody else's transcript.
+Built 2026-08-18, verified end to end on the Mac Mini through ORIS on
+2026-08-25: an episode with no publisher transcript was downloaded, transcribed
+locally, and summarized, with the machine-transcription caveat surfacing
+correctly to the reader.
 
 **Measured, on an M3 Pro.** Transcription runs at about 22x realtime — a
 62-minute episode in 168 seconds — at 1.4% word error against that show's own
@@ -595,14 +510,35 @@ GiB, model 1.5 GB on disk, roughly 4 seconds of process startup. Three of ten
 feeds publish their own transcript, so Whisper is the normal path rather than a
 fallback.
 
-**Full design:** `docs/superpowers/specs/2026-08-18-podcast-source-design.md`.
-It covers the two tools, the storage decision, why Whisper runs as a subprocess
-that exits, why the call blocks rather than queues, and the two storage details
-in the YouTube path that will silently break this if copied carelessly.
+**Design:** `docs/superpowers/specs/2026-08-18-podcast-source-design.md`.
 
-**Blocked on the operator's feed list.** Phase one is verifying each feed
-exposes a working audio URL, which needs no code.
+### R6 · Remove YouTube — ✅ **done 2026-08-26**
 
-**YouTube stays until podcasts prove out.** Deleting it early would cost 1,661
-lines, five tools, seven test files, and ORIS's only scheduled content
-specialist, to replace a source that still works for everything except audio.
+The gate written in R5 was "YouTube stays until podcasts prove out." They did, so
+it went.
+
+Removed: the whole `sources/yt/` package, five MCP tools, one CLI command, seven
+settings, seven test files, the channel list and its example, the digest prompt,
+and two runtime dependencies (`requests`, `youtube-transcript-api`). The MCP
+surface is 11 tools, down from 16. `app.py` went from 823 lines to 441.
+
+**`chunking.py` moved to the package root** rather than being deleted. Transcript
+paging is generic and podcasts depend on it; it was only ever in `sources/yt/`
+because YouTube needed it first.
+
+**Existing databases were deliberately not migrated.** Dropping the
+`youtube_processed_videos` table would have meant a schema version bump, and the
+guard's answer to an unreadable database is "delete it" — which would have cost
+the podcast transcripts stored alongside. The table and the historical `yt` rows
+are left in place, orphaned and harmless. Verified on a copy of the real
+database: 50 audited calls still readable, podcast transcripts still served.
+
+The podcast transcript lookup is scoped to `source = 'podcast'`, so an old video
+row can never be served as an episode. That scoping was written deliberately when
+podcasts were built, anticipating this removal, and it is what made the deletion
+a deletion rather than an untangling. A test covers it.
+
+**ORIS still wires three YouTube tool names** (`net_razor_yt_new_videos`,
+`net_razor_yt_transcript`, `net_razor_yt_mark_processed`) in its YouTube Catch-up
+graph. That graph cannot work against this build and needs removing on their
+side.

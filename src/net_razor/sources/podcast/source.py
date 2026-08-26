@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from net_razor.chunking import chunk_at, join_segments
 from net_razor.clock import ResolvedWindow
 from net_razor.models import (
     EvidenceAuthor,
@@ -33,7 +34,6 @@ from net_razor.sources.podcast.transcript_formats import (
     parse_transcript,
 )
 from net_razor.sources.podcast.whisper_runner import WhisperError, run_whisper
-from net_razor.sources.yt.chunking import chunk_at, join_segments
 
 # A transcript fetch carries no publish date of its own. A fixed sentinel keeps
 # the item deterministic, where the wall clock would not.

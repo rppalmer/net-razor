@@ -11,7 +11,6 @@ from net_razor.models import (
     HNRequest,
     ResearchRequest,
     XRequest,
-    YTRequest,
 )
 
 
@@ -45,11 +44,6 @@ def test_hn_request_defaults():
     assert request.max_results == 25
 
 
-def test_yt_request_caps_transcript_limit():
-    with pytest.raises(ValidationError):
-        YTRequest(query="agents", transcript_limit=99)
-
-
 def test_research_request_dedupes_sources():
     request = ResearchRequest(topic="agents", sources=["x", "x", "hn"])
     assert request.sources == ["x", "hn"]
@@ -64,10 +58,11 @@ def test_research_request_dedupes_sources():
         ("rate_limited", True),      # wait and try again
         ("timeout", True),
         ("upstream_error", True),
+        ("transcription_timeout", True),
         ("not_configured", False),   # will fail identically forever
         ("configuration_missing", False),
-        ("invalid_video_url", False),
-        ("transcripts_disabled", False),
+        ("no_transcript_found", False),
+        ("audio_too_large", False),
         ("invalid_transcript_call_id", False),
     ],
 )

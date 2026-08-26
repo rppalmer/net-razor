@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-import requests
-
-from net_razor.models import TranscriptSegment
-from net_razor.sources.yt.chunking import (
+from net_razor.chunking import (
     chunk_at,
     join_segments,
     plan_chunks,
     segments_in,
 )
-from net_razor.sources.yt.transcript_client import (
-    YouTubeTranscriptClient,
-    _TimeoutSession,
-)
+from net_razor.models import TranscriptSegment
 
 
 def _segments(*texts: str) -> list[TranscriptSegment]:
@@ -101,38 +95,3 @@ def test_segments_in_matches_the_returned_text():
 # --------------------------------------------------------------------------- #
 # transcript session timeout (the fix for the wedge-forever failure)
 # --------------------------------------------------------------------------- #
-def test_timeout_session_injects_a_default_timeout(monkeypatch):
-    captured: dict = {}
-
-    def fake_request(self, *args, **kwargs):
-        captured.update(kwargs)
-        return "sent"
-
-    monkeypatch.setattr(requests.Session, "request", fake_request)
-    _TimeoutSession(7.0).request("GET", "https://example.test")
-    assert captured["timeout"] == 7.0
-
-
-def test_timeout_session_does_not_override_an_explicit_timeout(monkeypatch):
-    captured: dict = {}
-
-    def fake_request(self, *args, **kwargs):
-        captured.update(kwargs)
-        return "sent"
-
-    monkeypatch.setattr(requests.Session, "request", fake_request)
-    _TimeoutSession(7.0).request("GET", "https://example.test", timeout=1.0)
-    assert captured["timeout"] == 1.0
-
-
-def test_transcript_client_is_bounded_with_and_without_a_proxy():
-    """The timeout must not depend on whether a proxy happens to be configured."""
-    direct = YouTubeTranscriptClient(None, timeout_seconds=5)
-    proxied = YouTubeTranscriptClient("http://proxy.test:8080", timeout_seconds=5)
-
-    assert isinstance(direct.session, _TimeoutSession)
-    assert isinstance(proxied.session, _TimeoutSession)
-    assert direct.session._timeout_seconds == 5
-    assert proxied.session._timeout_seconds == 5
-    assert proxied.session.proxies["https"] == "http://proxy.test:8080"
-    assert not direct.session.proxies

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
@@ -13,12 +12,8 @@ from net_razor.models import (
     HNRequest,
     ResearchRequest,
     ServiceErrorItem,
-    YTTranscriptRequest,
 )
-from net_razor.sources.yt.source import YTTranscriptFetcher
 from tests.conftest import RecordingSource, stub_settings
-
-_VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 
 def _hn_result(source_id: str = "1") -> FetchResult:
@@ -135,24 +130,24 @@ async def test_run_detail_unknown_call(make_app):
 @pytest.mark.asyncio
 async def test_research_builds_every_leg_from_the_source_registry(make_app):
     """The registry is the single place a source is declared — legs come from it."""
+    from net_razor.models import ArxivRequest as _Arxiv
     from net_razor.models import HNRequest as _HN
     from net_razor.models import XRequest as _X
-    from net_razor.models import YTRequest as _YT
 
     x = RecordingSource("x", FetchResult.empty({}))
     hn = RecordingSource("hn", FetchResult.empty({}))
-    yt = RecordingSource("yt", FetchResult.empty({}))
-    app = make_app(x=x, hn=hn, yt=yt)
+    arxiv = RecordingSource("arxiv", FetchResult.empty({}))
+    app = make_app(x=x, hn=hn, arxiv=arxiv)
 
     await app.research(
-        ResearchRequest(topic="agents", sources=["x", "hn", "yt"], days=3,
+        ResearchRequest(topic="agents", sources=["x", "hn", "arxiv"], days=3,
                         max_results_per_source=7)
     )
 
     # each source got the request type its own registry entry builds...
     assert isinstance(x.calls[0][0], _X)
     assert isinstance(hn.calls[0][0], _HN)
-    assert isinstance(yt.calls[0][0], _YT)
+    assert isinstance(arxiv.calls[0][0], _Arxiv)
     # ...carrying the shared parameters from the research request
     assert x.calls[0][0].days == hn.calls[0][0].days == 3
     assert x.calls[0][0].max_results == 7
@@ -189,126 +184,10 @@ async def test_a_hanging_leg_is_cut_off_and_the_others_still_return(make_app, mo
     assert response["caveats"]
 
 
-# --------------------------------------------------------------------------- #
-# transcript storage + paging (T2 + T9)
-# --------------------------------------------------------------------------- #
-@dataclass
-class _Seg:
-    text: str
-    start: float
-    duration: float
-
-
-class _FakeTranscript:
-    language = "English"
-    language_code = "en"
-    is_generated = False
-
-    def __init__(self, segments):
-        self._segments = segments
-
-    def __iter__(self):
-        return iter(self._segments)
-
-
-class _CountingTranscriptClient:
-    def __init__(self, segments):
-        self._segments = segments
-        self.calls: list[str] = []
-
-    def fetch(self, video_id, languages):
-        self.calls.append(video_id)
-        return _FakeTranscript(self._segments)
-
-
-@pytest.mark.asyncio
-async def test_transcript_is_stored_then_served_from_disk(make_app):
-    """A repeat fetch reads the stored copy instead of going back to YouTube."""
-    client = _CountingTranscriptClient([_Seg("hello there", 0.0, 1.0)])
-    app = make_app(yt_transcript=YTTranscriptFetcher(client))
-
-    first = await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=0))
-    second = await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=0))
-
-    assert first["text"] == second["text"] == "hello there"
-    assert first["from_cache"] is False
-    assert second["from_cache"] is True
-    assert client.calls == ["dQw4w9WgXcQ"]  # exactly one upstream fetch
-
-
-@pytest.mark.asyncio
-async def test_paging_a_long_transcript_costs_one_upstream_fetch(make_app):
-    """The whole point of T9: read a long video in parts without re-fetching it."""
-    segments = [_Seg(f"sentence number {index}", float(index), 1.0) for index in range(30)]
-    client = _CountingTranscriptClient(segments)
-    app = make_app(yt_transcript=YTTranscriptFetcher(client))
-
-    parts: list[str] = []
-    offset: int | None = 0
-    guard = 0
-    while offset is not None and guard < 50:
-        response = await app.yt_transcript(
-            YTTranscriptRequest(url=_VIDEO_URL, max_chars=60, offset=offset)
-        )
-        parts.append(response["text"])
-        offset = response["next_offset"]
-        guard += 1
-
-    assert len(parts) > 1, "a 30-segment transcript should span several parts"
-    assert "\n".join(parts) == "\n".join(segment.text for segment in segments)
-    assert client.calls == ["dQw4w9WgXcQ"]  # paging never touched the network again
-
-
-@pytest.mark.asyncio
-async def test_a_cached_transcript_is_not_served_for_a_different_language(make_app):
-    """An English copy on disk must not answer a request for Spanish."""
-    client = _CountingTranscriptClient([_Seg("hello there", 0.0, 1.0)])
-    app = make_app(yt_transcript=YTTranscriptFetcher(client))
-
-    await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=0))
-    spanish = await app.yt_transcript(
-        YTTranscriptRequest(url=_VIDEO_URL, languages=["es"], max_chars=0)
-    )
-
-    assert spanish["from_cache"] is False
-    assert client.calls == ["dQw4w9WgXcQ", "dQw4w9WgXcQ"]  # went upstream again
-
-
-@pytest.mark.asyncio
-async def test_a_regional_cached_language_still_answers_the_bare_preference(make_app):
-    client = _CountingTranscriptClient([_Seg("hello there", 0.0, 1.0)])
-    client_transcript_language = "en-US"
-    _FakeTranscript.language_code = client_transcript_language
-    try:
-        app = make_app(yt_transcript=YTTranscriptFetcher(client))
-        await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=0))
-        again = await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=0))
-        assert again["from_cache"] is True  # en-US satisfies a request for en
-        assert client.calls == ["dQw4w9WgXcQ"]
-    finally:
-        _FakeTranscript.language_code = "en"
-
-
-@pytest.mark.asyncio
-async def test_a_truncated_transcript_stays_recoverable_from_the_audit_store(make_app, store):
-    """'Complete for the audit' -- the capped response is not what gets stored."""
-    segments = [_Seg("a" * 80, 0.0, 1.0), _Seg("b" * 80, 1.0, 1.0)]
-    app = make_app(yt_transcript=YTTranscriptFetcher(_CountingTranscriptClient(segments)))
-
-    response = await app.yt_transcript(YTTranscriptRequest(url=_VIDEO_URL, max_chars=100))
-    assert response["truncated"] is True
-    assert len(response["text"]) < response["full_char_count"]
-
-    stored = store.stored_transcript("dQw4w9WgXcQ")
-    assert stored is not None
-    assert [segment["text"] for segment in stored["segments"]] == ["a" * 80, "b" * 80]
-
-
-def test_tests_never_read_the_real_channel_list(make_app):
-    """Isolation guard: the suite must not depend on the developer's channels.txt."""
+def test_tests_never_read_the_real_feed_list(make_app):
+    """Isolation guard: the suite must not depend on the developer's podcasts.txt."""
     app = make_app()
-    assert app.settings.youtube_channel_refs == []
-    assert not app.settings.channels_file.exists()
+    assert not app.settings.podcasts_file.exists()
 
 
 @pytest.mark.asyncio

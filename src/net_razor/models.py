@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-SourceName = Literal["x", "hn", "yt", "arxiv", "podcast"]
+SourceName = Literal["x", "hn", "arxiv", "podcast"]
 
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
@@ -81,7 +81,7 @@ class EvidenceItem(BaseModel):
     source: SourceName
     source_backend: str
     source_id: str
-    item_type: Literal["post", "video", "transcript", "paper", "episode"] = "post"
+    item_type: Literal["post", "transcript", "paper", "episode"] = "post"
     canonical_url: str
     title: str | None = None
     text: str
@@ -158,32 +158,6 @@ class HNRequest(_TextQuery):
         return self
 
 
-class YTRequest(_TextQuery):
-    query: str
-    max_results: int = Field(default=10, ge=1, le=25)
-    days: int = Field(default=1, ge=1, le=3650)
-    since: date | None = None
-    until: date | None = None
-    order: Literal["relevance", "date", "view_count"] = "relevance"
-    fetch_transcripts: bool = True
-    transcript_limit: int = Field(default=3, ge=0, le=10)
-    languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
-
-    @field_validator("languages")
-    @classmethod
-    def _validate_languages(cls, value: list[str]) -> list[str]:
-        languages = [lang.strip() for lang in value if lang.strip()]
-        if not languages:
-            raise ValueError("languages must contain at least one value")
-        return languages
-
-    @model_validator(mode="after")
-    def _validate_dates(self) -> YTRequest:
-        if self.since and self.until and self.until <= self.since:
-            raise ValueError("until must be after since")
-        return self
-
-
 class ArxivRequest(_TextQuery):
     """Search arXiv preprints.
 
@@ -216,144 +190,6 @@ class ArxivRequest(_TextQuery):
         if self.since and self.until and self.until <= self.since:
             raise ValueError("until must be after since")
         return self
-
-
-class YTTranscriptRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    url: str
-    languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
-    include_segments: bool = True
-    # Cap on returned transcript text; None -> YT_MAX_TRANSCRIPT_CHARS. 0 = no cap
-    # (pass 0 to get the complete transcript of a video that was truncated in a digest).
-    max_chars: int | None = Field(default=None, ge=0)
-    # Character offset into the full transcript. Pass the previous response's
-    # `next_offset` to read the following chunk; chunks are cut on segment
-    # boundaries, and offsets that land mid-chunk snap to the chunk containing them.
-    offset: int = Field(default=0, ge=0)
-
-    @field_validator("url")
-    @classmethod
-    def _validate_url(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("url must not be empty")
-        if len(value) > 2048:
-            raise ValueError("url must contain at most 2048 characters")
-        return value
-
-    @field_validator("languages")
-    @classmethod
-    def _validate_languages(cls, value: list[str]) -> list[str]:
-        languages = [lang.strip() for lang in value if lang.strip()]
-        if not languages:
-            raise ValueError("languages must contain at least one value")
-        return languages
-
-
-class YTMarkProcessedRequest(BaseModel):
-    """Successful transcript calls whose videos completed downstream processing."""
-
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    transcript_call_ids: list[str] = Field(min_length=1)
-
-    @field_validator("transcript_call_ids")
-    @classmethod
-    def _validate_call_ids(cls, value: list[str]) -> list[str]:
-        call_ids = [call_id.strip() for call_id in value]
-        if any(not call_id for call_id in call_ids):
-            raise ValueError("transcript call IDs must not be empty")
-        return list(dict.fromkeys(call_ids))
-
-
-class YTChannelDigestRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    # Empty -> use the channels configured in settings. Non-empty overrides them
-    # (accepts channel IDs, @handles, or channel URLs).
-    channels: list[str] = Field(default_factory=list)
-    days: int = Field(default=7, ge=1, le=3650)
-    since: date | None = None
-    until: date | None = None
-    videos_per_channel: int = Field(default=5, ge=1, le=25)
-    fetch_transcripts: bool = True
-    transcript_limit_per_channel: int = Field(default=2, ge=0, le=10)
-    languages: list[str] = Field(default_factory=lambda: ["en"], min_length=1)
-    # Drop videos already returned by a prior digest run (dedup across daily runs).
-    # None -> fall back to the YT_DIGEST_ONLY_NEW config default.
-    only_new: bool | None = None
-    # Skip videos with no fetchable transcript (e.g. captions disabled) instead of
-    # falling back to the description. None -> YT_DIGEST_REQUIRE_TRANSCRIPT default.
-    require_transcript: bool | None = None
-    # Cap on each transcript's characters; None -> YT_MAX_TRANSCRIPT_CHARS. 0 = no cap.
-    max_transcript_chars: int | None = Field(default=None, ge=0)
-
-    @field_validator("channels")
-    @classmethod
-    def _clean_channels(cls, value: list[str]) -> list[str]:
-        return [entry.strip() for entry in value if entry.strip()]
-
-    @field_validator("languages")
-    @classmethod
-    def _validate_languages(cls, value: list[str]) -> list[str]:
-        languages = [lang.strip() for lang in value if lang.strip()]
-        if not languages:
-            raise ValueError("languages must contain at least one value")
-        return languages
-
-    @model_validator(mode="after")
-    def _validate_dates(self) -> YTChannelDigestRequest:
-        if self.since and self.until and self.until <= self.since:
-            raise ValueError("until must be after since")
-        return self
-
-
-class YTNewVideosRequest(BaseModel):
-    """Lightweight discovery: recent videos across channels, no transcripts.
-
-    The work queue for the incremental flow — list new videos, then process one at
-    a time via ``yt_transcript`` so only one transcript is ever in context."""
-
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    channels: list[str] = Field(default_factory=list)
-    days: int = Field(default=7, ge=1, le=3650)
-    since: date | None = None
-    until: date | None = None
-    videos_per_channel: int = Field(default=10, ge=1, le=25)
-    # By default only videos not yet transcribed are returned (a durable queue);
-    # set True to include ones already processed.
-    include_processed: bool = False
-
-    @field_validator("channels")
-    @classmethod
-    def _clean_channels(cls, value: list[str]) -> list[str]:
-        return [entry.strip() for entry in value if entry.strip()]
-
-    @model_validator(mode="after")
-    def _validate_dates(self) -> YTNewVideosRequest:
-        if self.since and self.until and self.until <= self.since:
-            raise ValueError("until must be after since")
-        return self
-
-
-class YTChannelLeg(BaseModel):
-    """One channel's slice of a digest — the audited request for a single leg."""
-
-    channel_id: str
-    channel_title: str = ""
-    videos_per_channel: int = Field(ge=1, le=25)
-    fetch_transcripts: bool = True
-    transcript_limit: int = Field(ge=0, le=10)
-    languages: list[str] = Field(min_length=1)
-    query_label: str
-    only_new: bool = False
-    require_transcript: bool = False
-    max_transcript_chars: int = Field(default=0, ge=0)
-    # Video IDs to skip (already seen). Excluded from the audit dump — the set can be
-    # large and grows over time; only the ``only_new`` flag and skip count are recorded.
-    exclude_video_ids: list[str] = Field(default_factory=list, exclude=True)
 
 
 class ResearchRequest(BaseModel):

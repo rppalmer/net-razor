@@ -61,18 +61,10 @@ inject a fake transport instead of hitting the network.
 | Podcast transcript | `sources/podcast/source.py` · `PodcastTranscriptFetcher` | `PodcastFeedClient` | publisher transcript files | none |
 | Podcast Whisper | `sources/podcast/source.py` · `PodcastWhisperFetcher` | `run_whisper` → Python subprocess | local model, no upstream | none |
 | X | `sources/x/source.py` · `XSource` | `BirdXSearchBackend` → Node subprocess | x.com private GraphQL | session cookies |
-| YT search | `sources/yt/source.py` · `YTSource` | `HttpYouTubeSearchClient` | YouTube Data API | API key |
-| YT transcript | `sources/yt/source.py` · `YTTranscriptFetcher` | `YouTubeTranscriptClient` | youtube-transcript-api | none |
-| YT digest | `sources/yt/digest.py` · `YTChannelDigest` | `YouTubeRssClient` + transcript client | youtube.com RSS | none |
 
-Two supporting modules carry YouTube logic that spans tools rather than belonging
-to one source: `sources/yt/channels.py` (per-channel overrides, leg planning,
-recent-video collection) and `sources/yt/chunking.py` (transcript paging). Both
-are pure and independently testable.
-
-The RSS client is a single shared instance: `App` holds it as `yt_discovery`, and
-`YTChannelDigest` holds the same object. That is deliberate — it means an
-`@handle` is resolved to a channel ID at most once per process.
+`chunking.py` sits at the package root rather than inside a source, because
+transcript paging belongs to no one source. It is pure and independently
+testable.
 
 **Podcasts have two transcript paths and one storage slot, and the first writer
 wins.** The publisher's own transcript is immediate and usually carries speaker
@@ -93,12 +85,11 @@ subprocess also returns its several gigabytes on exit and contains a crash. This
 is the same shape as the vendored Node backend the X source uses, for different
 reasons.
 
-The podcast stored-transcript lookup is a second implementation rather than a
-generalisation of YouTube's. The two barely differ, but YouTube may be removed
-once podcasts prove out, and sharing would turn that removal into an untangling.
-It also does not filter on language: podcasts have no language preference, so
-the condition that makes YouTube's lookup able to silently hide a transcript
-simply does not exist here.
+The stored-transcript lookup is scoped to `source = 'podcast'`. Databases that
+predate the removal of YouTube still hold `yt` rows keyed by video ID, and an old
+video row must never be served as an episode transcript. It also does not filter
+on language: podcasts have no language preference, so the condition that let the
+old YouTube lookup silently hide a transcript does not exist here.
 
 ## The call path
 
@@ -122,7 +113,7 @@ App.<tool>(request)
   └─ return response
 ```
 
-Fan-out tools (`research`, `yt_channel_digest`) open a parent call, then run each
+Fan-out tools (`research`) open a parent call, then run each
 leg through the same path with `parent_id` set. A failing leg becomes an error
 entry plus a caveat; the other legs still return. The parent is marked
 `completed_with_errors`, never `failed`.
@@ -133,10 +124,9 @@ timeouts — it exists so one leg that never returns cannot hang the whole call
 forever. A leg that trips it comes back as a `timeout` error alongside the legs
 that succeeded.
 
-Fan-out width is bounded too. The unauthenticated YouTube paths share
-`CHANNEL_CONCURRENCY` (4) from `sources/yt/channels.py`, because the documented
-risk there is a YouTube IP block: concurrent enough to be quick across a dozen
-channels, quiet enough not to look like scraping.
+Fan-out width is bounded too. Podcast discovery uses `FEED_CONCURRENCY` (4) from
+`sources/podcast/source.py`: concurrent enough to be quick across a dozen feeds,
+quiet enough not to look like scraping.
 
 ## The rules
 
@@ -163,20 +153,19 @@ fan-out.
 sees it. Sources receive the window and never ask what time it is. The resolved
 window is echoed back to the caller in `effective_request`.
 
-Each tool takes **one** clock reading and derives everything from it — including
-per-channel windows for `| days=` overrides, which is why
-`channels.channel_window()` takes `now` as an argument rather than reading it.
+Each tool takes **one** clock reading and derives everything from it, so every
+leg of a fan-out shares an identical window.
 
 **4 · Compact for the caller, complete for the audit.** The response carries
 normalized `EvidenceItem`s only. Full upstream payloads go to the `raw` table,
 linked by `call_id` + `source_id`. `EvidenceItem` has no `raw` field by
 construction, and a test asserts it.
 
-On the YouTube paths this is load-bearing rather than decorative: the **complete**
-transcript is stored even when the response is capped, which is what lets
-`yt_transcript` page through a long video without re-fetching it. The stored copy
-is written once, on the fetch that retrieved it — later pages read it back rather
-than storing another copy.
+On the transcript paths this is load-bearing rather than decorative: the
+**complete** transcript is stored even when the response is capped, which is what
+lets `podcast_transcript` page through a long episode without re-fetching or
+re-transcribing it. The stored copy is written once, on the fetch that produced
+it — later pages read it back rather than storing another copy.
 
 > **Deviation:** X stores the vendored Node backend's parsed item, not the
 > upstream GraphQL response, because the raw payload never crosses the subprocess
@@ -187,14 +176,14 @@ than storing another copy.
 order. No cross-source ranking, no scoring, no merging. The caller decides what
 matters.
 
-This held everywhere except one place, now removed: `_rank_candidates` re-sorted
-YouTube search results by term hits and view count *after* the API had already
-applied the caller's `order`, so `order="date"` silently came back ranked by
-popularity. Deleting it both restored the rule and fixed the parameter.
+The one ordering decision that remains is not editorial: podcast discovery
+merges episodes from several feeds, so it sorts newest-first because some order
+has to be chosen.
 
-The one ordering decision that remains is not editorial: a channel-restricted
-search merges results from several channels, so it sorts newest-first because
-some order has to be chosen.
+This is also why podcasts cannot join a `research` fan-out. There is no keyword
+search over episodes, and matching a topic against episode titles would be a
+scoring judgement — so `ResearchRequest` rejects `podcast` outright rather than
+guessing.
 
 ## Audit store
 
@@ -206,22 +195,20 @@ SQLite, WAL mode, five tables.
 | `items` | normalized `EvidenceItem`s, one row each |
 | `raw` | full upstream payloads, keyed by `call_id` + `source_id` |
 | `errors` | handled errors, as `{type, message, details}` |
-| `youtube_processed_videos` | acknowledgement state for the incremental flow |
 
 Reads that serve content back:
 
-- `stored_transcript()` — the complete transcript for a video, used to page a long
+- `stored_podcast_transcript()` — the complete transcript for an episode, used to page a long
   one without re-fetching. Returns `None` on a miss, which simply means a fetch;
   a pruned or deleted database costs speed, never correctness.
 
-`youtube_processed_videos` is **application state, not audit data.** It survives
+`podcast_processed_episodes` is **application state, not audit data.** It survives
 `prune`, which is deliberate and covered by a test — pruning your history must
 not make the agent re-summarize everything.
 
 Reads that drive behaviour, not just record it:
 
-- `seen_source_ids()` — backs the digest's `only_new` dedup.
-- `processed_youtube_video_ids()` — backs the `yt_new_videos` work queue.
+- `processed_podcast_episode_ids()` — backs the `podcast_new_episodes` work queue.
 
 This is why the audit trail is a database and not an append-only file: the app
 queries it on every call.
@@ -231,7 +218,7 @@ the log file as well as the database — the log has no rotation, so prune is th
 only thing that shortens it. Growth is roughly 30 KB per call.
 
 Pruning deliberately does not touch the acknowledgement tables. They are what
-keeps a processed video or episode out of its queue, and that has to outlive the
+keeps a processed episode out of its queue, and that has to outlive the
 transcript it refers to.
 
 **Schema changes:** `initialize()` stamps `PRAGMA user_version`, and
@@ -294,8 +281,8 @@ because there is almost nothing in it to test.
 ## Configuration
 
 Fourteen environment variables in `~/.net-razor/.env`, plus
-`~/.net-razor/channels.txt` for the YouTube
-channel list. Two rules shaped that split:
+`~/.net-razor/podcasts.txt` for the podcast
+feed list. Two rules shaped that split:
 
 - **Secrets and toggles in `.env`; lists in files.** A multi-line dotenv value had
   to be double-quoted or only its first line was read, and a `#` inside the quotes
@@ -303,7 +290,7 @@ channel list. Two rules shaped that split:
   doesn't have them.
 - **Operational numbers are constants, not settings.** Retry counts, backoff,
   request pacing and API base URLs live in code (`XSearchTuning`,
-  `HN_ALGOLIA_BASE_URL`, `YOUTUBE_API_BASE_URL`, `CHANNEL_CONCURRENCY`). Nobody
+  `HN_ALGOLIA_BASE_URL`, `FEED_CONCURRENCY`). Nobody
   tunes retry backoff on a personal tool; a wrong default deserves a commit. They
   stay injectable so tests can drop the waits to zero.
 
@@ -313,7 +300,7 @@ MCP host populates `env:`.
 ## Deliberate non-goals
 
 - **No request cache.** Every search goes upstream. The stored transcripts are a
-  durable payload store, not a cache: a repeated or paged `yt_transcript` call
+  durable payload store, not a cache: a repeated or paged `podcast_transcript` call
   re-reads local text (and only when the stored language satisfies the request),
   but no search result is ever memoized.
 - **No cross-source ranking.** See rule 5.

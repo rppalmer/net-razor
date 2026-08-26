@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from net_razor.cli.main import _csv_values, parse_args, run_command
+from net_razor.cli.main import parse_args, run_command
 from net_razor.mcp.server import create_server
 from net_razor.models import EvidenceAuthor, EvidenceItem, FetchResult
 from tests.conftest import RecordingSource
@@ -17,11 +17,6 @@ EXPECTED_TOOLS = {
     "net_razor_x_search",
     "net_razor_arxiv_search",
     "net_razor_hn_search",
-    "net_razor_yt_search",
-    "net_razor_yt_new_videos",
-    "net_razor_yt_channel_digest",
-    "net_razor_yt_mark_processed",
-    "net_razor_yt_transcript",
     "net_razor_podcast_new_episodes",
     "net_razor_podcast_transcript",
     "net_razor_podcast_mark_processed",
@@ -30,7 +25,7 @@ EXPECTED_TOOLS = {
 
 # Every command the CLI still offers. The search tools are MCP-only by design;
 # what remains is what a person needs when the agent can't help.
-CLI_COMMANDS = {"doctor", "runs", "run", "prune", "x-search", "yt-transcript"}
+CLI_COMMANDS = {"doctor", "runs", "run", "prune", "x-search"}
 
 
 def _item(source_id: str = "1") -> EvidenceItem:
@@ -67,23 +62,18 @@ async def test_mcp_hn_search_routes_through_app(make_app):
 # --------------------------------------------------------------------------- #
 # CLI surface -- every surviving command is dispatched for real
 # --------------------------------------------------------------------------- #
-def test_cli_csv_values():
-    assert _csv_values("x, hn , ,yt") == ["x", "hn", "yt"]
-
-
 @pytest.mark.parametrize("command", sorted(CLI_COMMANDS))
 def test_cli_parses_every_surviving_command(command):
     extra = {
         "run": ["some-call-id"],
         "prune": ["--before", "2026-01-01"],
         "x-search": ["a query"],
-        "yt-transcript": ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"],
     }.get(command, [])
     args = parse_args([command, *extra])
     assert args.command == command
 
 
-@pytest.mark.parametrize("removed", ["research", "hn-search", "yt-search", "yt-new-videos"])
+@pytest.mark.parametrize("removed", ["research", "hn-search", "podcast-transcript"])
 def test_cli_no_longer_offers_the_agent_facing_commands(removed):
     """These are MCP-only now; the CLI must reject them rather than half-work."""
     with pytest.raises(SystemExit):
@@ -137,29 +127,6 @@ async def test_cli_x_search_dispatches_to_the_app(make_app, capsys):
     assert '"call_id"' in capsys.readouterr().out
 
 
-@pytest.mark.asyncio
-async def test_cli_yt_transcript_dispatches_with_offset(make_app, capsys):
-    class _Fetcher:
-        def __init__(self):
-            self.offsets: list[int] = []
-
-        async def transcript(self, request, *, max_chars=0, cached=None):
-            self.offsets.append(request.offset)
-            return FetchResult(
-                items=[], raw={}, errors=[], effective_request={},
-                meta={"response": {"video_id": "dQw4w9WgXcQ", "text": "hi", "errors": []}},
-            )
-
-    fetcher = _Fetcher()
-    exit_code = await run_command(
-        parse_args([
-            "yt-transcript", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "--offset", "120",
-        ]),
-        app=make_app(yt_transcript=fetcher),
-    )
-    assert exit_code == 0
-    assert fetcher.offsets == [120]
-    assert "dQw4w9WgXcQ" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------- #

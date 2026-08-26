@@ -13,7 +13,7 @@ def test_operator_data_resolves_to_the_home_directory_not_the_checkout() -> None
     home = Path.home() / ".net-razor"
 
     assert settings.database_path.is_relative_to(home)
-    assert settings.channels_file.is_relative_to(home)
+    assert settings.podcasts_file.is_relative_to(home)
     assert not settings.database_path.is_relative_to(settings.repo_root)
 
 

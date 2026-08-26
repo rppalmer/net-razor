@@ -6,11 +6,7 @@ import json
 from typing import Any
 
 from net_razor.app import create_app
-from net_razor.models import XRequest, YTTranscriptRequest
-
-
-def _csv_values(value: str) -> list[str]:
-    return [part.strip() for part in value.split(",") if part.strip()]
+from net_razor.models import XRequest
 
 
 def _iso_midnight(day: str) -> str:
@@ -52,25 +48,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     x_search.add_argument("--days", type=int, default=1)
     x_search.add_argument("--mode", choices=["latest", "top"], default="latest")
 
-    yt_transcript = subparsers.add_parser(
-        "yt-transcript",
-        help="Fetch one YouTube transcript. Also a check that the proxy works.",
-    )
-    yt_transcript.add_argument("url")
-    yt_transcript.add_argument("--languages", default="en")
-    yt_transcript.add_argument(
-        "--include-segments", action=argparse.BooleanOptionalAction, default=True
-    )
-    yt_transcript.add_argument(
-        "--max-chars", type=int, default=None,
-        help="Characters per part (0 = whole transcript). Defaults to YT_MAX_TRANSCRIPT_CHARS.",
-    )
-    yt_transcript.add_argument(
-        "--offset", type=int, default=0,
-        help="Character offset to read from. Pass the previous response's next_offset "
-             "to read the following part.",
-    )
-
     return parser.parse_args(argv)
 
 
@@ -100,20 +77,6 @@ async def run_command(args: argparse.Namespace, app: Any | None = None) -> int:
             await resolved_app.x_search(
                 XRequest(query=args.query, max_results=args.max_results,
                          days=args.days, mode=args.mode)
-            )
-        )
-        return 0
-
-    if args.command == "yt-transcript":
-        _print_json(
-            await resolved_app.yt_transcript(
-                YTTranscriptRequest(
-                    url=args.url,
-                    languages=_csv_values(args.languages),
-                    include_segments=args.include_segments,
-                    max_chars=args.max_chars,
-                    offset=args.offset,
-                )
             )
         )
         return 0

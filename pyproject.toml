@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "net-razor"
 version = "0.1.0"
-description = "MCP-first local research runtime for X, Hacker News, and YouTube."
+description = "MCP-first local research runtime for X, Hacker News, arXiv, and podcasts."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,10 +14,6 @@ dependencies = [
     # `pip install -U` must not move the server across it on its own.
     "mcp>=1.9,<2",
     "pydantic-settings>=2.3",
-    # Imported directly by sources/yt/transcript_client.py to put a timeout on the
-    # transcript session. Previously resolved only via youtube-transcript-api.
-    "requests>=2.31",
-    "youtube-transcript-api>=1.2",
 ]
 
 [project.optional-dependencies]
