@@ -107,6 +107,16 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
             "hn": {"configured": True},
             # No key, no account, no settings -- nothing to misconfigure.
             "arxiv": {"configured": True},
+            "podcast": {
+                # A feed list is the whole configuration. Without one there is
+                # nothing to discover, which is why this mirrors the check above.
+                "configured": bool(podcast_feeds),
+                "feeds_file": str(settings.podcasts_file),
+                "configured_feed_count": len(podcast_feeds),
+                "whisper_enabled": settings.podcast_whisper_enabled,
+                "whisper_model": settings.podcast_whisper_model,
+                "ffmpeg_available": ffmpeg_path is not None,
+            },
         },
         "checks": checks,
     }
