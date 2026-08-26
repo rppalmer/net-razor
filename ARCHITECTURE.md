@@ -226,8 +226,13 @@ Reads that drive behaviour, not just record it:
 This is why the audit trail is a database and not an append-only file: the app
 queries it on every call.
 
-**Retention:** none automatic. `prune --before <date>` is manual. Growth is
-roughly 30 KB per call.
+**Retention:** none automatic. `prune --before <date>` is manual, and covers
+the log file as well as the database — the log has no rotation, so prune is the
+only thing that shortens it. Growth is roughly 30 KB per call.
+
+Pruning deliberately does not touch the acknowledgement tables. They are what
+keeps a processed video or episode out of its queue, and that has to outlive the
+transcript it refers to.
 
 **Schema changes:** `initialize()` stamps `PRAGMA user_version`, and
 `_READABLE_VERSIONS` lists what this build can open. Anything else stops at

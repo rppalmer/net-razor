@@ -16,7 +16,7 @@ from net_razor.models import (
     YTTranscriptRequest,
 )
 from net_razor.sources.yt.source import YTTranscriptFetcher
-from tests.conftest import RecordingSource
+from tests.conftest import RecordingSource, stub_settings
 
 _VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -309,3 +309,34 @@ def test_tests_never_read_the_real_channel_list(make_app):
     app = make_app()
     assert app.settings.youtube_channel_refs == []
     assert not app.settings.channels_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_prune_also_trims_the_log_file(make_app, tmp_path):
+    """`prune --before` is the one command an operator runs to reclaim space.
+    The log grows without bound and nothing rotates it, so leaving it out meant
+    the command only half did its job."""
+
+    log_file = tmp_path / "net-razor.log"
+    log_file.write_text(
+        '{"timestamp":"2026-06-01T10:00:00+00:00","level":"INFO",'
+        '"logger":"net_razor.audit","message":"old"}\n'
+        '{"timestamp":"2026-08-01T10:00:00+00:00","level":"INFO",'
+        '"logger":"net_razor.audit","message":"kept"}\n',
+        encoding="utf-8",
+    )
+    app = make_app(settings=stub_settings(log_file=log_file))
+
+    result = app.prune(before="2026-07-01T00:00:00+00:00")
+
+    assert result["log"] == {"removed": 1, "kept": 1}
+    assert "old" not in log_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_prune_reports_no_log_work_when_logging_to_stderr_only(make_app):
+    """LOG_FILE is unset by default, and prune must stay a no-op then."""
+
+    app = make_app(settings=stub_settings(log_file=None))
+
+    assert app.prune(before="2026-07-01T00:00:00+00:00")["log"] == {"removed": 0, "kept": 0}

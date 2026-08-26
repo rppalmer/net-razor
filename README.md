@@ -576,7 +576,7 @@ credentials expired?" in two seconds. All commands print JSON.
 .venv/bin/net-razor doctor                       # setup diagnostics; exits non-zero on failure
 .venv/bin/net-razor runs --limit 20              # recent audited calls
 .venv/bin/net-razor run <call_id>                # one call, with children, items, and errors
-.venv/bin/net-razor prune --before 2026-01-01    # delete history older than a date
+.venv/bin/net-razor prune --before 2026-01-01    # delete history and log lines older than a date
 
 # manual checks
 .venv/bin/net-razor x-search "Python agents lang:en" --max-results 5
@@ -615,8 +615,13 @@ Every tool call is persisted. Inspect it with `net-razor runs` and `net-razor ru
 calls, its normalized items, and its errors; upstream payloads stay in the `raw` table.
 `net-razor doctor` reports the audit store's row counts and on-disk size, and
 `net-razor prune --before <YYYY-MM-DD>` deletes calls (and their items, raw, and errors) older
-than a date. Acknowledged-video state survives pruning, so clearing history does not make the
-agent re-summarize everything.
+than a date, and drops log lines from the same period out of `LOG_FILE` — nothing rotates that
+file, so this is the only thing that ever shortens it. It reports both counts.
+
+Acknowledged-video and acknowledged-episode state survives pruning, so clearing history does not
+make the agent re-summarize everything. The consequence is worth knowing: prune an old episode
+and you lose its transcript while keeping the mark saying you already handled it. It stays out of
+the queue, and asking for its transcript again re-fetches from scratch.
 
 **The database is expendable.** If a future version can't read it, the server stops at startup
 and tells you to delete it — deleting costs you history and the acknowledged-video list, not the
@@ -631,7 +636,9 @@ The one exception is X, which stores the vendored Node backend's parsed item rat
 upstream GraphQL response — the raw payload never crosses the subprocess boundary. Treat "raw"
 on the X path as "what the backend returned," not "what x.com returned."
 
-**Retention is manual.** Nothing prunes automatically; growth is roughly 30 KB per call.
+**Retention is manual.** Nothing prunes automatically and nothing rotates the log; growth is
+roughly 30 KB per call. A podcast episode's stored transcript is the largest single row at
+100–200 KB. Once a scheduled run is covering a handful of feeds, expect a few MB a week.
 
 ## Safety notes
 

@@ -12,7 +12,7 @@ from net_razor.audit.store import AuditStore
 from net_razor.clock import Clock, ResolvedWindow, SystemClock, resolve_window
 from net_razor.config import Settings, get_settings
 from net_razor.diagnostics import build_doctor_report
-from net_razor.logging import configure_json_logging
+from net_razor.logging import configure_json_logging, prune_log_file
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
@@ -583,7 +583,24 @@ class App:
         return {"runs": self.store.list_calls(limit=limit)}
 
     def prune(self, *, before: str) -> dict[str, Any]:
-        return {"pruned": self.store.prune(before=before)}
+        """Reclaim space: old audited calls, and the log lines from the same era.
+
+        The log is included because nothing else ever shortens it -- there is no
+        rotation, and this is the one command an operator runs to free space.
+
+        The acknowledgement tables are deliberately left alone. They are what
+        keeps an already-processed episode out of the queue, and that has to
+        outlive the transcript it refers to.
+        """
+
+        return {
+            "pruned": self.store.prune(before=before),
+            "log": (
+                prune_log_file(self.settings.log_file, before=before)
+                if self.settings.log_file is not None
+                else {"removed": 0, "kept": 0}
+            ),
+        }
 
     def run_detail(self, call_id: str) -> dict[str, Any]:
         detail = self.store.get_call(call_id)
