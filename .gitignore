@@ -9,6 +9,8 @@
 .env*
 channels.txt
 !channels.example.txt
+podcasts.txt
+!podcasts.example.txt
 **/.env*
 !**/.env.example
 *.env

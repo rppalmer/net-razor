@@ -1,0 +1,20 @@
+# Net-Razor podcast list. Copy to ~/.net-razor/podcasts.txt and edit.
+#   cp podcasts.example.txt ~/.net-razor/podcasts.txt
+#
+# It must live in ~/.net-razor. A copy left in the checkout is not read.
+#
+# One canonical RSS feed URL per line. The feed URL is the show's identity: the
+# same show appears in Apple, Overcast and a dozen other directories, all
+# pointing here. A directory page is not a feed -- nothing checks that when this
+# file is parsed, so an Apple or Spotify URL is accepted and then fails on fetch.
+#
+# Resolve an Apple show ID to its feed once, when you add the show:
+#   curl -s "https://itunes.apple.com/lookup?id=1410835265&entity=podcast" \
+#     | python3 -c "import json,sys; print(json.load(sys.stdin)['results'][0]['feedUrl'])"
+#
+# Keeping the Apple ID in a comment lets a feed be re-resolved if it ever moves.
+#
+# '#' starts a comment anywhere on a line. No quoting rules, no escaping.
+
+# LINUX Unplugged  (apple id 687598126) -- publishes transcripts
+# https://feeds.jupiterbroadcasting.com/lup

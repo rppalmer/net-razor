@@ -1,5 +1,7 @@
-# Net-Razor channel list. Copy to channels.txt and edit.
-#   cp channels.example.txt channels.txt
+# Net-Razor channel list. Copy to ~/.net-razor/channels.txt and edit.
+#   cp channels.example.txt ~/.net-razor/channels.txt
+#
+# It must live in ~/.net-razor. A copy left in the checkout is not read.
 #
 # One channel per line. Any of these forms works:
 #   UCxxxxxxxxxxxxxxxxxxxxxx        a bare channel ID (no lookup needed)

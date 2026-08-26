@@ -46,16 +46,58 @@ why `NODE_BINARY` sometimes needs an absolute path. Both are accepted on purpose
 
 ## Setup
 
+Python 3.11 or newer.
+
 ```bash
+git clone https://github.com/rppalmer/net-razor.git
+cd net-razor
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-
-cp .env.example .env
 ```
 
-Then edit `.env` — see [Configuration](#configuration). Settings are loaded once at startup, so
-**restart the server after any change.**
+Two external programs are optional and used by one source each. `node` is needed only for X
+search. `ffmpeg` is needed only for local podcast transcription — see
+[Enabling local transcription](#enabling-local-transcription).
+
+### Where configuration lives
+
+**Not in the checkout.** Everything an operator sets lives in `~/.net-razor`. An MCP host picks
+the working directory and passes a narrow environment, so anything resolved from the checkout is
+found only when something happens to launch from the right place — and it would keep secrets in a
+directory under version control.
+
+Four things live there, none of them tracked by git:
+
+| Path | Holds | Needed for |
+| --- | --- | --- |
+| `~/.net-razor/.env` | Credentials and toggles | X search, and anything non-default |
+| `~/.net-razor/channels.txt` | YouTube channels, one per line | The YouTube tools |
+| `~/.net-razor/podcasts.txt` | Podcast RSS feeds, one per line | The podcast tools |
+| `~/.net-razor/data/` | The SQLite audit store | Created on first run |
+
+```bash
+mkdir -p ~/.net-razor
+cp .env.example         ~/.net-razor/.env
+cp channels.example.txt ~/.net-razor/channels.txt
+cp podcasts.example.txt ~/.net-razor/podcasts.txt
+```
+
+Then edit all three. The two lists ship fully commented out, so a fresh install starts with no
+channels and no feeds rather than someone else's. For `.env`, see
+[Configuration](#configuration).
+
+Copies left in the checkout are **ignored, silently** — the server starts normally and behaves as
+though nothing was configured. Only the `~/.net-razor` copies are read. Settings load once at
+startup, so **restart the server after any change.**
+
+Run `net-razor doctor` before wiring the server into a host. It prints every path it actually
+resolved, how many channels and feeds it parsed, and whether each source is configured — which is
+the fastest way to catch a file written to the wrong place.
+
+**Setting up a second machine** means installing as above and copying those three files across.
+Do not copy the database: it is created on first run, and a fresh one is the correct starting
+state for the YouTube and podcast queues.
 
 **Precedence:** a variable already present in the process environment **overrides** `.env`,
 silently and with no warning. That matters if your MCP host populates `env:` in its server
@@ -66,8 +108,8 @@ lowest-priority source, not the only one.
 
 ### A working `.env`
 
-A typical setup is X cookies (only if you want X search) and a couple of defaults for a
-scheduled run. The YouTube channel list lives in its own file, not here:
+`~/.net-razor/.env`. A typical setup is X cookies, if you use X, plus a few defaults for a
+scheduled run. The source lists are not here — they live in their own files.
 
 ```dotenv
 # X search — cookies from a logged-in x.com session (omit these if you don't use X)
@@ -78,19 +120,23 @@ CT0=your_x_ct0_cookie
 YT_DIGEST_ONLY_NEW=true            # don't re-process videos seen in a prior run
 YT_DIGEST_REQUIRE_TRANSCRIPT=true  # skip videos with no captions (e.g. livestreams)
 
-# Write logs to a file (MCP hosts usually discard the server's stderr)
+# Transcribe podcast episodes locally when the show publishes no transcript.
+# Needs Apple Silicon, ffmpeg, and pip install -e '.[whisper]'.
+PODCAST_WHISPER_ENABLED=true
+
+# Write logs to a file (MCP hosts usually discard the server's stderr).
+# Relative, so this lands in ~/.net-razor/logs/net-razor.log
 LOG_FILE=logs/net-razor.log
 
 # Only needed if you use yt_search (keyword search across all of YouTube)
 # YOUTUBE_API_KEY=your_youtube_data_api_key
 ```
 
-The YouTube channel list is **not** in `.env` — it lives in `~/.net-razor/channels.txt`:
+The two source lists are plain text, one entry per line, `#` comments anywhere on a line, and no
+quoting or escaping rules at all — which is deliberate, because dotenv quoting traps were
+swallowing entries silently when these lived in `.env`.
 
-```bash
-mkdir -p ~/.net-razor
-cp channels.example.txt ~/.net-razor/channels.txt
-```
+`~/.net-razor/channels.txt`:
 
 ```
 @channel1 | videos=1
@@ -98,14 +144,26 @@ cp channels.example.txt ~/.net-razor/channels.txt
 UCxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-One per line, `#` comments anywhere, no quoting rules. See [Channel list](#channel-list).
+See [Channel list](#channel-list) for the accepted forms and the per-channel overrides.
+
+`~/.net-razor/podcasts.txt`:
+
+```
+https://feeds.jupiterbroadcasting.com/lup
+https://feeds.transistor.fm/talkin-bout-infosec-news
+```
+
+Canonical RSS feed URLs only. The parser checks that a line is an `http(s)` URL and nothing more,
+so an Apple or Spotify show page is accepted here and then fails when it is fetched, reported as
+an `invalid_response` error for that one feed. See [Podcasts](#podcasts) for resolving a show ID
+to its feed once, when you add it.
 
 ### Every setting
 
-Fourteen variables, all optional unless marked **required**. Relative paths resolve to the repo
-root. Retry, backoff and request-pacing numbers are deliberately *not* configurable — they are
-constants in the code, because nobody tunes retry backoff on a personal tool and a wrong default
-deserves a commit, not a `.env` edit.
+Twenty-one variables, all optional unless marked **required**. A relative path resolves against
+`~/.net-razor`, not the checkout. Retry, backoff and request-pacing numbers are deliberately
+*not* configurable — they are constants in the code, because nobody tunes retry backoff on a
+personal tool and a wrong default deserves a commit, not a `.env` edit.
 
 **Core & logging**
 
@@ -135,6 +193,21 @@ deserves a commit, not a `.env` edit.
 | `YT_MAX_TRANSCRIPT_CHARS` | Characters of transcript per part (`0` = the whole thing in one response). ~`40000` ≈ a 35-minute video | `40000` |
 | `YOUTUBE_API_KEY` | YouTube Data API key. **Only** for `yt_search`; the digest / new-videos / transcript tools need no key | *unset* |
 | `YT_SEARCH_MODE` | For `yt_search` only: `broad` (all of YouTube) or `channels` (restrict to your channel list). A typo is rejected at startup rather than silently treated as `broad` | `broad` |
+
+**Podcasts** — the last five matter only when local transcription is on.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PODCASTS_FILE` | Where the podcast feed list lives | `~/.net-razor/podcasts.txt` |
+| `PODCAST_MAX_TRANSCRIPT_CHARS` | Characters of transcript per part. Lower than YouTube's because episodes run longer | `12000` |
+| `PODCAST_WHISPER_ENABLED` | Turn on local transcription. Needs Apple Silicon, `ffmpeg`, and the `whisper` extra | `false` |
+| `PODCAST_WHISPER_MODEL` | Hugging Face model the transcriber loads. Downloaded on first use (~1.5 GB) | `mlx-community/whisper-large-v3-turbo` |
+| `PODCAST_WHISPER_TIMEOUT_SECONDS` | Ceiling before the transcriber subprocess is killed. A three-hour episode measures at ~8 minutes | `900` |
+| `PODCAST_MAX_AUDIO_BYTES` | Refuse an episode larger than this rather than filling the disk | `524288000` (500 MB) |
+| `PODCAST_AUDIO_TIMEOUT_SECONDS` | Total budget for downloading one episode, not a gap-between-chunks timeout | `300` |
+
+A consumer's read timeout must clear the sum of the request, audio and Whisper caps — see
+[Enabling local transcription](#enabling-local-transcription).
 
 ### Channel list
 
@@ -287,9 +360,12 @@ that anything can fetch it: no token, no login, no negotiation. A 62-minute,
 60MB episode downloads in about a second.
 
 `~/.net-razor/podcasts.txt` holds one canonical RSS feed URL per line, with `#`
-comments. Directory links are deliberately not accepted — an Apple or Spotify
-show page is not a feed. Resolve an Apple show ID to its feed once, when you add
-the show, and store the feed URL:
+comments. Net-Razor deliberately does not resolve directory links, because doing
+so would make it depend on a third party at runtime for something it needs only
+once. An Apple or Spotify show page is not a feed: nothing validates that when
+the file is parsed, so a directory URL is accepted and then fails on fetch as an
+`invalid_response` error naming that feed. Resolve an Apple show ID to its feed
+once, when you add the show, and store the feed URL:
 
 ```bash
 curl -s "https://itunes.apple.com/lookup?id=1410835265&entity=podcast" \
