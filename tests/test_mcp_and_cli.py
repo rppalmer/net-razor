@@ -17,6 +17,7 @@ EXPECTED_TOOLS = {
     "net_razor_x_search",
     "net_razor_arxiv_search",
     "net_razor_hn_search",
+    "net_razor_podcast_feeds",
     "net_razor_podcast_new_episodes",
     "net_razor_podcast_transcript",
     "net_razor_podcast_mark_processed",

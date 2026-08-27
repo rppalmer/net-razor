@@ -188,6 +188,25 @@ def create_server(app: App | None = None) -> FastMCP:
         )
 
     @mcp.tool()
+    async def net_razor_podcast_feeds() -> dict[str, Any]:
+        """The podcast shows this server is configured with, by name.
+
+        Use this to answer "which podcasts can you cover?" -- the configuration
+        is a list of feed URLs, so this is the only way to learn the show names.
+        Also the way to get a feed_url, which podcast_transcript and
+        podcast_whisper_transcript both require.
+
+        Each show reports publishes_transcripts, read from its newest episode:
+        true means try podcast_transcript first, false means that show normally
+        needs podcast_whisper_transcript. It is a hint about the show, not a
+        promise about a given episode.
+
+        Takes about a second, since it reads every configured feed. A feed that
+        cannot be read appears in errors while the rest still return.
+        """
+        return await net_razor_app.podcast_feeds()
+
+    @mcp.tool()
     async def net_razor_podcast_new_episodes(
         days: Annotated[int, Field(ge=1, le=3650)] = 7,
         max_episodes_per_feed: Annotated[int, Field(ge=1, le=25)] = 5,

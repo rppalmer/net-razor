@@ -126,3 +126,125 @@ async def test_effective_request_records_what_was_asked_not_what_came_back():
 def test_research_rejects_podcast_with_a_message_naming_the_real_tools():
     with pytest.raises(ValueError, match="podcast_new_episodes"):
         ResearchRequest(topic="anything", sources=["podcast"])
+
+
+# --------------------------------------------------------------------------- #
+# Listing the configured shows
+# --------------------------------------------------------------------------- #
+async def test_list_shows_names_every_configured_feed():
+    """The feed list holds URLs; a person asking what they subscribe to wants names."""
+    feed_a, feed_b = "https://example.com/a.rss", "https://example.com/b.rss"
+    client = FakeFeedClient({
+        feed_a: [_episode("a1", datetime(2026, 8, 12, tzinfo=UTC), feed_url=feed_a)],
+        feed_b: [_episode("b1", datetime(2026, 8, 14, tzinfo=UTC), feed_url=feed_b)],
+    })
+
+    shows, errors = await _source(client, feeds=(feed_a, feed_b)).list_shows()
+
+    assert errors == []
+    assert [show["feed_url"] for show in shows] == [feed_a, feed_b]
+    assert all(show["show_title"] == "Example Show" for show in shows)
+
+
+async def test_list_shows_reports_whether_a_show_publishes_transcripts():
+    """This is the whole point: it tells the caller which shows need Whisper."""
+    with_transcript = _episode(
+        "a1", datetime(2026, 8, 12, tzinfo=UTC),
+        transcript_urls=[("https://example.com/a1.vtt", "text/vtt")],
+    )
+    client = FakeFeedClient({
+        "https://example.com/a.rss": [with_transcript],
+        "https://example.com/b.rss": [_episode("b1", datetime(2026, 8, 14, tzinfo=UTC))],
+    })
+
+    shows, _ = await _source(
+        client, feeds=("https://example.com/a.rss", "https://example.com/b.rss")
+    ).list_shows()
+
+    assert shows[0]["publishes_transcripts"] is True
+    assert shows[1]["publishes_transcripts"] is False
+
+
+async def test_list_shows_carries_the_latest_episode():
+    newest = _episode("new", datetime(2026, 8, 14, tzinfo=UTC), title="The newest one")
+    older = _episode("old", datetime(2026, 8, 1, tzinfo=UTC))
+    client = FakeFeedClient({"https://example.com/feed.rss": [newest, older]})
+
+    shows, _ = await _source(client).list_shows()
+
+    assert shows[0]["episode_count"] == 2
+    assert shows[0]["latest_episode_title"] == "The newest one"
+    assert shows[0]["latest_episode_at"] == "2026-08-14T00:00:00+00:00"
+
+
+async def test_list_shows_reports_a_broken_feed_without_losing_the_others():
+    """One dead feed must not hide the seven that work."""
+    class _PartlyBroken(FakeFeedClient):
+        async def fetch_feed(self, feed_url):
+            if feed_url == "https://example.com/broken.rss":
+                raise PodcastFeedError("upstream_error", "the feed is down")
+            return await super().fetch_feed(feed_url)
+
+    client = _PartlyBroken({
+        "https://example.com/ok.rss": [_episode("a", datetime(2026, 8, 12, tzinfo=UTC))]
+    })
+
+    shows, errors = await _source(
+        client, feeds=("https://example.com/broken.rss", "https://example.com/ok.rss")
+    ).list_shows()
+
+    assert [show["feed_url"] for show in shows] == ["https://example.com/ok.rss"]
+    assert [error.type for error in errors] == ["upstream_error"]
+    assert errors[0].details == {"feed": "https://example.com/broken.rss"}
+
+
+async def test_list_shows_with_no_feeds_configured_says_so():
+    shows, errors = await _source(FakeFeedClient(), feeds=()).list_shows()
+
+    assert shows == []
+    assert [error.type for error in errors] == ["not_configured"]
+
+
+async def test_list_shows_reports_a_feed_that_parsed_but_has_no_episodes():
+    """An empty feed is not an error, and must not look like a missing show."""
+    client = FakeFeedClient({"https://example.com/feed.rss": []})
+
+    shows, errors = await _source(client).list_shows()
+
+    assert errors == []
+    assert shows[0]["episode_count"] == 0
+    assert shows[0]["latest_episode_at"] is None
+    assert shows[0]["publishes_transcripts"] is False
+
+
+# --------------------------------------------------------------------------- #
+# The audited tool on top of it
+# --------------------------------------------------------------------------- #
+async def test_podcast_feeds_tool_is_audited_and_returns_the_shows(make_app, store):
+    client = FakeFeedClient({
+        "https://example.com/feed.rss": [_episode("a", datetime(2026, 8, 12, tzinfo=UTC))]
+    })
+    app = make_app(podcast=_source(client))
+
+    response = await app.podcast_feeds()
+
+    assert response["feed_count"] == 1
+    assert response["shows"][0]["show_title"] == "Example Show"
+    assert response["errors"] == []
+    # audited like every other outbound call
+    assert any(run["tool"] == "podcast_feeds" for run in app.runs()["runs"])
+    assert store.get_call(response["call_id"])["call"]["status"] == "ok"
+
+
+async def test_podcast_feeds_tool_reports_a_broken_feed_as_a_handled_error(make_app):
+    """A dead feed comes back inside a successful response, never as a fault."""
+    app = make_app(podcast=_source(
+        FakeFeedClient(error=PodcastFeedError("upstream_error", "the feed is down")),
+        feeds=("https://example.com/broken.rss",),
+    ))
+
+    response = await app.podcast_feeds()
+
+    assert response["shows"] == []
+    assert response["errors"][0]["type"] == "upstream_error"
+    assert response["errors"][0]["retriable"] is True

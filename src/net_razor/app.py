@@ -197,6 +197,35 @@ class App:
             call.set_response(response)
             return response
 
+    async def podcast_feeds(self) -> dict[str, Any]:
+        """The configured shows, named.
+
+        Takes no arguments on purpose: the question it answers is "what am I
+        subscribed to", and the feed list is the only possible answer. A feed
+        that fails comes back in ``errors`` beside the ones that worked.
+        """
+
+        async with self.recorder.call(
+            tool="podcast_feeds", source="podcast", request={}
+        ) as call:
+            source = self.sources["podcast"].source
+            shows, errors = await source.list_shows()
+            call.record(
+                effective_request={"feeds": [show["feed_url"] for show in shows]},
+                items=[],
+                raw={},
+                errors=errors,
+            )
+            response = {
+                "call_id": call.id,
+                "source": "podcast",
+                "feed_count": len(shows),
+                "shows": shows,
+                "errors": [error.model_dump(mode="json") for error in errors],
+            }
+            call.set_response(response)
+            return response
+
     async def podcast_new_episodes(self, request: PodcastNewEpisodesRequest) -> dict[str, Any]:
         """Recent episodes, minus the ones already acknowledged.
 

@@ -206,10 +206,21 @@ One transcript in context at a time, rather than hours of text at once.
 
 | Tool | What it does |
 | --- | --- |
+| `podcast_feeds` | The configured shows, by name, and which publish transcripts. |
 | `podcast_new_episodes` | Recent episodes across the feeds. Descriptions, no transcripts. |
 | `podcast_transcript` | The show's own transcript, paged. Immediate when it exists. |
 | `podcast_whisper_transcript` | Transcribes the audio locally. Minutes, not seconds. |
 | `podcast_mark_processed` | Acknowledges episodes so they leave the queue, durably. |
+
+### Which shows are configured
+
+`podcast_feeds` takes no arguments and names every configured show. The configuration is a list
+of RSS URLs, and a URL is not an answer to "what do I subscribe to". It is also how a caller gets
+the `feed_url` that both transcript tools require.
+
+Each show reports `publishes_transcripts`, read from its newest episode, so a caller can see at a
+glance which shows are served instantly and which need Whisper. It reads every feed, so it costs
+about a second; a feed that cannot be read appears in `errors` while the rest still return.
 
 ### Two transcript tools, and when to use which
 
@@ -321,11 +332,9 @@ Expressed as JSON, which is what most hosts want:
 ```
 
 Replace `<repo-root>` with the checkout path on that machine. A host that supports timeouts
-should allow at least 60s, since a digest across several channels fetches transcripts. Config and the audit database
-resolve relative to the checkout, not the working directory, so no `cwd` is required — this
-works because the documented setup is an **editable** install (`pip install -e`). Under a
-non-editable `pip install .` the package lives in `site-packages`, the checkout markers are
-absent, and paths silently fall back to the current working directory instead.
+should allow at least 60s, and well above that if you use local transcription — see
+[Enabling local transcription](#enabling-local-transcription) for the number. Configuration and
+the audit database live in `~/.net-razor`, so no `cwd` is required and the checkout can move.
 
 X search shells out to Node and locates it with `shutil.which`, which searches the launching
 host's `PATH`. If your MCP host launches with a sparse environment, `node` may not be found. The
@@ -341,6 +350,11 @@ Available MCP tools:
 - `net_razor_x_search`
 - `net_razor_hn_search`
 - `net_razor_arxiv_search`
+- `net_razor_podcast_feeds`
+- `net_razor_podcast_new_episodes`
+- `net_razor_podcast_transcript`
+- `net_razor_podcast_whisper_transcript`
+- `net_razor_podcast_mark_processed`
 
 The tool schemas carry the constraints the server actually enforces — `mode` and `sort` expose
 their enums, `sources` exposes `["x","hn","arxiv"]`, and the integer parameters expose their ranges.
