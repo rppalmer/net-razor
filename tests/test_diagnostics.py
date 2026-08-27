@@ -26,3 +26,33 @@ def test_doctor_warns_when_transcription_is_on_without_ffmpeg(make_app, tmp_path
 
     assert checks["podcast_whisper_ready"]["ok"] is False
     assert "ffmpeg" in checks["podcast_whisper_ready"]["message"]
+
+
+def test_doctor_describes_the_podcast_source_alongside_the_others(make_app, tmp_path):
+    """Podcasts are the only source that was missing from the `sources` block.
+
+    The checks already covered feeds and transcription, but a reader comparing
+    sources side by side saw x, hn and arxiv and no podcasts at all.
+    """
+    feeds = tmp_path / "podcasts.txt"
+    feeds.write_text("https://example.com/a.rss\nhttps://example.com/b.rss\n")
+    app = make_app(settings=stub_settings(podcasts_file=feeds))
+
+    sources = app.doctor()["sources"]
+
+    assert set(sources) == {"x", "hn", "arxiv", "podcast"}
+    assert sources["podcast"] == {
+        "configured": True,
+        "feeds_file": str(feeds),
+        "configured_feed_count": 2,
+        "whisper_enabled": False,
+        "whisper_model": "mlx-community/whisper-large-v3-turbo",
+        "ffmpeg_available": sources["podcast"]["ffmpeg_available"],
+    }
+
+
+def test_doctor_reports_the_podcast_source_unconfigured_without_feeds(make_app):
+    sources = make_app().doctor()["sources"]
+
+    assert sources["podcast"]["configured"] is False
+    assert sources["podcast"]["configured_feed_count"] == 0

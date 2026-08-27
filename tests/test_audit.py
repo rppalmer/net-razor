@@ -106,72 +106,12 @@ async def test_prune_deletes_old_calls_and_children(store):
     assert store.get_call(new_id) is not None
 
 
-@pytest.mark.asyncio
-async def test_stored_transcript_reads_the_digest_nested_shape(store):
-    """The digest nests the transcript under "transcript"; lookup must find both."""
-    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
-    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
-        call.record(
-            effective_request={},
-            items=[],
-            raw={
-                "vid00000001": {
-                    "video_id": "vid00000001",
-                    "title": "from the feed",
-                    "transcript": {
-                        "language_code": "en",
-                        "segment_count": 1,
-                        "segments": [{"text": "hi", "start": 0.0, "duration": 1.0}],
-                    },
-                }
-            },
-            errors=[],
-        )
-
-    payload = store.stored_transcript("vid00000001")
-    assert payload is not None
-    assert payload["segments"][0]["text"] == "hi"
 
 
-def test_stored_transcript_returns_none_when_absent(store):
-    """A pruned or missing payload means a re-fetch, never an error."""
-    assert store.stored_transcript("nothing-here") is None
 
 
-@pytest.mark.asyncio
-async def test_stored_transcript_ignores_payloads_without_segments(store):
-    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
-    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
-        call.record(
-            effective_request={},
-            items=[],
-            raw={"vid00000002": {"video_id": "vid00000002", "transcript": None}},
-            errors=[],
-        )
-    assert store.stored_transcript("vid00000002") is None
 
 
-@pytest.mark.asyncio
-async def test_seen_source_ids_scoped_to_tool_and_source(store):
-    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
-
-    def yt_item(vid: str) -> EvidenceItem:
-        return EvidenceItem(
-            source="yt", source_backend="yt-api", source_id=vid,
-            canonical_url=f"https://www.youtube.com/watch?v={vid}", text="t",
-            author=EvidenceAuthor(handle="c", display_name="C"),
-            published_at=datetime(2026, 7, 1, tzinfo=UTC), query_used="@chan",
-        )
-
-    async with recorder.call(tool="yt_channel_digest", source="yt", request={}) as call:
-        call.record(effective_request={}, items=[yt_item("vidA"), yt_item("vidB")],
-                    raw={}, errors=[])
-    # a different tool's items must not leak into the digest's seen set
-    async with recorder.call(tool="hn_search", source="hn", request={}) as call:
-        call.record(effective_request={}, items=[_item("hn1")], raw={}, errors=[])
-
-    seen = store.seen_source_ids(tool="yt_channel_digest", source="yt")
-    assert seen == {"vidA", "vidB"}
 
 
 def test_stats_reports_counts_and_size(store):
@@ -180,29 +120,6 @@ def test_stats_reports_counts_and_size(store):
     assert stats["database_bytes"] >= 0
 
 
-@pytest.mark.asyncio
-async def test_initialize_backfills_legacy_successful_transcripts(store):
-    with sqlite3.connect(store.database_path) as connection:
-        connection.execute("DROP TABLE youtube_processed_videos")
-
-    recorder = AuditRecorder(store, FixedClock(datetime(2026, 7, 6, tzinfo=UTC)))
-    item = EvidenceItem(
-        source="yt",
-        source_backend="yt-api",
-        source_id="legacy-video",
-        item_type="transcript",
-        canonical_url="https://www.youtube.com/watch?v=legacy-video",
-        text="transcript",
-        author=EvidenceAuthor(handle="channel", display_name="Channel"),
-        published_at=datetime(2026, 7, 1, tzinfo=UTC),
-        query_used="https://www.youtube.com/watch?v=legacy-video",
-    )
-    async with recorder.call(tool="yt_transcript", source="yt", request={}) as call:
-        call.record(effective_request={}, items=[item], raw={}, errors=[])
-
-    store.initialize()
-
-    assert store.processed_youtube_video_ids() == {"legacy-video"}
 
 
 def test_fetch_result_empty_helper():

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from net_razor.app import App, SourceEntry, _arxiv_leg, _hn_leg, _podcast_leg, _x_leg, _yt_leg
+from net_razor.app import App, SourceEntry, _arxiv_leg, _hn_leg, _podcast_leg, _x_leg
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import FixedClock, ResolvedWindow
@@ -48,9 +48,8 @@ def make_app(store, clock):
     """Factory building an App wired with fake sources."""
 
     def _make(
-        *, x=None, hn=None, yt=None, arxiv=None, podcast=None, yt_transcript=None,
-        podcast_transcript=None, podcast_whisper=None, yt_digest=None,
-        yt_discovery=None, settings=None,
+        *, x=None, hn=None, arxiv=None, podcast=None,
+        podcast_transcript=None, podcast_whisper=None, settings=None,
     ) -> App:
         return App(
             settings=settings or stub_settings(database_path=store.database_path),
@@ -66,10 +65,6 @@ def make_app(store, clock):
                     source=hn or RecordingSource("hn", FetchResult.empty({})),
                     label="HN", build_request=_hn_leg,
                 ),
-                "yt": SourceEntry(
-                    source=yt or RecordingSource("yt", FetchResult.empty({})),
-                    label="YT", build_request=_yt_leg,
-                ),
                 "arxiv": SourceEntry(
                     source=arxiv or RecordingSource("arxiv", FetchResult.empty({})),
                     label="arXiv", build_request=_arxiv_leg,
@@ -79,34 +74,13 @@ def make_app(store, clock):
                     label="Podcasts", build_request=_podcast_leg,
                 ),
             },
-            yt_transcript_fetcher=yt_transcript or _StubTranscriptFetcher(),
             podcast_transcript_fetcher=podcast_transcript or _StubPodcastTranscriptFetcher(),
             podcast_whisper_fetcher=podcast_whisper or _StubPodcastWhisperFetcher(
                 enabled=(settings or stub_settings()).podcast_whisper_enabled
             ),
-            yt_channel_digest_source=yt_digest or _StubDigest(),
-            yt_discovery=yt_discovery or _StubDiscovery(),
         )
 
     return _make
-
-
-class _StubTranscriptFetcher:
-    async def transcript(self, request, *, max_chars=0):
-        return FetchResult(
-            items=[], raw={}, errors=[], effective_request={},
-            meta={"response": {"video_id": "", "text": None, "errors": []}},
-        )
-
-
-class _StubDigest:
-    name = "yt"
-
-    async def resolve_channels(self, refs):
-        return [], [ref.raw for ref in refs]
-
-    async def fetch(self, leg, window):
-        return FetchResult.empty({})
 
 
 class _StubPodcastTranscriptFetcher:
@@ -175,14 +149,6 @@ class _StubPodcastWhisperFetcher:
         )
 
 
-class _StubDiscovery:
-    async def resolve_channels(self, refs):
-        return [], [ref.raw for ref in refs]
-
-    async def recent_videos(self, channel_id, window, max_results):
-        return []
-
-
 def stub_settings(**overrides) -> Settings:
     """A real ``Settings`` for tests, isolated from ``.env`` and the shell.
 
@@ -197,16 +163,8 @@ def stub_settings(**overrides) -> Settings:
     values: dict = {
         "auth_token": None,
         "ct0": None,
-        "youtube_api_key": None,
-        # Never the repo's real channels.txt -- tests must not depend on it.
-        "channels_file": Path("/nonexistent/channels.txt"),
-        # Same isolation for the podcast feed list.
+        # Never the repo's real podcasts.txt -- tests must not depend on it.
         "podcasts_file": Path("/nonexistent/podcasts.txt"),
-        "yt_proxy_url": None,
-        "yt_search_mode": "broad",
-        "yt_digest_only_new": False,
-        "yt_digest_require_transcript": False,
-        "yt_max_transcript_chars": 0,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)

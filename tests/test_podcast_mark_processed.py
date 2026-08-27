@@ -68,7 +68,7 @@ async def test_acknowledging_a_transcript_call_records_its_episode(make_app, sto
 async def test_an_unknown_call_id_is_reported_without_discarding_the_rest(
     make_app, store, clock
 ):
-    """Partial success, as yt_mark_processed does: one bad id must not throw away
+    """Partial success: one bad id must not throw away
     the acknowledgements that were valid."""
     app = make_app()
     good = await _transcript_call(app, store, clock, episode_id="ep-1")

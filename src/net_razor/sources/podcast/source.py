@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from net_razor.chunking import chunk_at, join_segments
 from net_razor.clock import ResolvedWindow
 from net_razor.models import (
     EvidenceAuthor,
@@ -33,7 +34,6 @@ from net_razor.sources.podcast.transcript_formats import (
     parse_transcript,
 )
 from net_razor.sources.podcast.whisper_runner import WhisperError, run_whisper
-from net_razor.sources.yt.chunking import chunk_at, join_segments
 
 # A transcript fetch carries no publish date of its own. A fixed sentinel keeps
 # the item deterministic, where the wall clock would not.
@@ -77,6 +77,57 @@ class PodcastSource:
     def __init__(self, *, feed_client: FeedClient, configured_feeds: list[str]) -> None:
         self._client = feed_client
         self._configured_feeds = configured_feeds
+
+    async def list_shows(self) -> tuple[list[dict[str, Any]], list[ServiceErrorItem]]:
+        """The configured shows, named, in the order the feed list gives them.
+
+        Answers "what am I subscribed to, and which of those need Whisper?" --
+        which the feed list alone cannot, because it holds URLs. Each entry is
+        one feed fetch, so this costs about a second across a normal list.
+
+        ``publishes_transcripts`` reads the newest episode only. A show that
+        started or stopped publishing transcripts is reported by what it does
+        now, which is what a caller deciding between the two transcript tools
+        needs. It is a hint, not a guarantee: the tools still report per episode.
+        """
+
+        if not self._configured_feeds:
+            return [], [
+                ServiceErrorItem(
+                    type="not_configured",
+                    message=(
+                        "No podcast feeds are configured. "
+                        "Add RSS feed URLs to podcasts.txt."
+                    ),
+                )
+            ]
+
+        semaphore = asyncio.Semaphore(FEED_CONCURRENCY)
+
+        async def one(
+            feed_url: str,
+        ) -> tuple[dict[str, Any] | None, ServiceErrorItem | None]:
+            async with semaphore:
+                try:
+                    show_title, episodes = await self._client.fetch_feed(feed_url)
+                except PodcastFeedError as exc:
+                    return None, ServiceErrorItem(
+                        type=exc.error_type, message=exc.message, details={"feed": feed_url}
+                    )
+            newest = episodes[0] if episodes else None
+            return {
+                "show_title": show_title,
+                "feed_url": feed_url,
+                "episode_count": len(episodes),
+                "latest_episode_title": newest.title if newest else None,
+                "latest_episode_at": newest.published_at.isoformat() if newest else None,
+                "publishes_transcripts": bool(newest and newest.transcript_urls),
+            }, None
+
+        results = await asyncio.gather(*(one(feed) for feed in self._configured_feeds))
+        shows = [show for show, _ in results if show is not None]
+        errors = [error for _, error in results if error is not None]
+        return shows, errors
 
     async def fetch(self, request: object, window: ResolvedWindow) -> FetchResult:
         assert isinstance(request, PodcastNewEpisodesRequest)

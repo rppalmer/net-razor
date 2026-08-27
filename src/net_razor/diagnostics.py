@@ -76,16 +76,6 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
                 )
             ),
         },
-        {
-            "name": "youtube_search_configured",
-            "ok": settings.youtube_search_configured,
-            "severity": "warning",
-            "message": (
-                "YouTube search is configured."
-                if settings.youtube_search_configured
-                else "YouTube search needs YOUTUBE_API_KEY in .env."
-            ),
-        },
     ]
 
     return {
@@ -117,13 +107,15 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
             "hn": {"configured": True},
             # No key, no account, no settings -- nothing to misconfigure.
             "arxiv": {"configured": True},
-            "yt": {
-                "api_key_configured": settings.youtube_api_key_value is not None,
-                "search_configured": settings.youtube_search_configured,
-                "search_mode": settings.yt_search_mode,
-                "channels_file": str(settings.channels_file),
-                "configured_channel_count": len(settings.youtube_channel_refs),
-                "proxy_configured": settings.proxy_url_value is not None,
+            "podcast": {
+                # A feed list is the whole configuration. Without one there is
+                # nothing to discover, which is why this mirrors the check above.
+                "configured": bool(podcast_feeds),
+                "feeds_file": str(settings.podcasts_file),
+                "configured_feed_count": len(podcast_feeds),
+                "whisper_enabled": settings.podcast_whisper_enabled,
+                "whisper_model": settings.podcast_whisper_model,
+                "ffmpeg_available": ffmpeg_path is not None,
             },
         },
         "checks": checks,

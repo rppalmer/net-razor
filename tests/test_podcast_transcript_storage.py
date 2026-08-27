@@ -35,16 +35,17 @@ def test_stored_transcript_round_trips_by_episode_id(store, clock):
 
 
 def test_a_youtube_row_is_never_returned_for_a_podcast_episode(store, clock):
-    """The two lookups are deliberately separate. Neither may see the other's rows."""
+    """YouTube is gone, but databases that predate its removal still hold `yt`
+    rows. The lookup is source-scoped so an old video row can never be served
+    as an episode transcript."""
     _seed(store, clock, call_id="c1", source="yt", episode_id="ep-1", payload=_payload())
     assert store.stored_podcast_transcript("ep-1") is None
 
 
 def test_a_missing_language_code_still_returns_the_transcript(store, clock):
-    """The YouTube lookup silently drops these. The podcast lookup must not.
-
-    A transcript invisible to its own lookup causes an endless, silent re-fetch,
-    so this asserts the absence of that whole class of bug.
+    """A transcript invisible to its own lookup causes an endless, silent
+    re-fetch. The removed YouTube lookup had exactly that bug, by filtering on
+    language; this asserts the absence of that whole class of failure.
     """
     _seed(store, clock, call_id="c1", source="podcast", episode_id="ep-1",
           payload=_payload(language_code=None))
