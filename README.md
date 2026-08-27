@@ -46,15 +46,22 @@ why `NODE_BINARY` sometimes needs an absolute path. Both are accepted on purpose
 
 ## Setup
 
-Python 3.11 or newer.
+Python 3.11 or newer, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/rppalmer/net-razor.git
 cd net-razor
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
+uv sync --extra dev
 ```
+
+That creates `.venv` and installs exactly the versions in `uv.lock`, so two
+machines running this server run the same code. Add `--extra whisper` for local
+podcast transcription; see
+[Enabling local transcription](#enabling-local-transcription).
+
+`uv sync` does **not** put `pip` in the environment. Use `uv pip install` if you
+need to add something by hand, or `uv add` to record it in `pyproject.toml` and
+the lock at the same time.
 
 Two external programs are optional and used by one source each. `node` is needed only for X
 search. `ffmpeg` is needed only for local podcast transcription — see
@@ -115,7 +122,7 @@ AUTH_TOKEN=your_x_auth_token_cookie
 CT0=your_x_ct0_cookie
 
 # Transcribe podcast episodes locally when the show publishes no transcript.
-# Needs Apple Silicon, ffmpeg, and pip install -e '.[whisper]'.
+# Needs Apple Silicon, ffmpeg, and uv sync --extra whisper.
 PODCAST_WHISPER_ENABLED=true
 
 # Write logs to a file (MCP hosts usually discard the server's stderr).
@@ -258,7 +265,7 @@ downloaded on first use.
 
 ```bash
 brew install ffmpeg
-pip install -e '.[whisper]'
+uv sync --extra dev --extra whisper
 echo 'PODCAST_WHISPER_ENABLED=true' >> ~/.net-razor/.env
 ```
 
@@ -487,5 +494,4 @@ roughly 30 KB per call. A podcast episode's stored transcript is the largest sin
 - **Whisper transcription runs entirely on this machine.** Episode audio is never uploaded
   anywhere, and the model is a local file. Audio lives in a temporary directory that is deleted
   when the call ends.
-- If `net-razor` or another module is not found, run:
-  `./.venv/bin/python -m pip install -e ".[dev]"`.
+- If `net-razor` or another module is not found, run `uv sync --extra dev` again.
