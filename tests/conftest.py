@@ -89,6 +89,7 @@ class _StubPodcastTranscriptFetcher:
     async def transcript(self, request, *, max_chars, cached):
         from net_razor.models import TranscriptSegment
         from net_razor.sources.podcast.source import (
+            _stored_metadata,
             _transcript_error,
             build_transcript_result,
         )
@@ -108,6 +109,7 @@ class _StubPodcastTranscriptFetcher:
             language_code=cached.get("language_code"),
             backend=cached.get("source_backend") or "publisher",
             max_chars=max_chars, effective=effective, store_raw=False,
+            metadata=_stored_metadata(cached),
         )
 
 
@@ -123,6 +125,7 @@ class _StubPodcastWhisperFetcher:
     async def transcript(self, request, *, max_chars, cached):
         from net_razor.models import TranscriptSegment
         from net_razor.sources.podcast.source import (
+            _stored_metadata,
             _transcript_error,
             build_transcript_result,
         )
@@ -137,6 +140,7 @@ class _StubPodcastWhisperFetcher:
                 language_code=cached.get("language_code"),
                 backend=cached.get("source_backend") or "whisper",
                 max_chars=max_chars, effective=effective, store_raw=False,
+                metadata=_stored_metadata(cached),
             )
         if not self.enabled:
             return _transcript_error(

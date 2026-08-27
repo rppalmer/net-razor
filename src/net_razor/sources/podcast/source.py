@@ -204,20 +204,51 @@ class PodcastSource:
         )
 
 
+_METADATA_KEYS = ("title", "published_at", "show_title", "episode_url")
+
+
+def _stored_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    """Episode metadata read back out of a stored transcript, if it has any.
+
+    Transcripts written before this was stored have none, and fall back to the
+    old shape rather than failing.
+    """
+
+    return {key: payload[key] for key in _METADATA_KEYS if payload.get(key)}
+
+
+def episode_metadata(episode: PodcastEpisode | None) -> dict[str, Any]:
+    """What a transcript needs to be findable later: title, date, show, page."""
+
+    if episode is None:
+        return {}
+    return {
+        "title": episode.title,
+        "published_at": episode.published_at.isoformat(),
+        "show_title": episode.show_title,
+        "episode_url": episode.episode_url,
+    }
+
+
 def _transcript_payload(
     segments: list[TranscriptSegment],
     language: str | None,
     language_code: str | None,
     source_backend: str,
+    metadata: dict[str, Any],
 ) -> dict[str, Any]:
     """The complete transcript, as stored in the audit trail.
 
     ``source_backend`` is stored rather than assumed, so a response serving this
-    payload later can say truthfully which backend produced it. Once Whisper
-    writes here too, that is the only thing distinguishing a machine-made
-    transcript from a published one.
+    payload later can say truthfully which backend produced it. It is the only
+    thing distinguishing a machine-made transcript from a published one.
+
+    The episode's title, date and show are stored with it because a cached serve
+    never reads the feed. Without them here, the second call to either tool
+    would lose the metadata the first one had.
     """
     return {
+        **metadata,
         "language": language,
         "language_code": language_code,
         "source_backend": source_backend,
@@ -229,16 +260,28 @@ def _transcript_payload(
 def _transcript_item(
     request: PodcastTranscriptRequest,
     response: dict[str, Any],
+    metadata: dict[str, Any],
 ) -> EvidenceItem:
+    """The audited record of one transcript.
+
+    Falls back to the feed URL and the epoch when metadata is absent -- which is
+    now only a transcript stored before this carried any.
+    """
+
+    show = metadata.get("show_title") or request.feed_url
+    published_at = metadata.get("published_at")
     return EvidenceItem(
         source="podcast",
         source_backend=response["source_backend"],
         source_id=request.episode_id,
         item_type="transcript",
-        canonical_url=request.feed_url,
+        title=metadata.get("title") or "",
+        canonical_url=metadata.get("episode_url") or request.feed_url,
         text=response["text"] or "",
-        author=EvidenceAuthor(handle=request.feed_url, display_name=request.feed_url),
-        published_at=_NO_PUBLISH_DATE,
+        author=EvidenceAuthor(handle=show, display_name=show),
+        published_at=(
+            datetime.fromisoformat(published_at) if published_at else _NO_PUBLISH_DATE
+        ),
         query_used=request.episode_id,
         truncated=response["truncated"],
     )
@@ -291,6 +334,7 @@ def build_transcript_result(
     max_chars: int,
     effective: dict[str, Any],
     store_raw: bool,
+    metadata: dict[str, Any] | None = None,
 ) -> FetchResult:
     """Page a complete transcript and shape the response.
 
@@ -315,15 +359,16 @@ def build_transcript_result(
         "from_cache": not store_raw,
         "errors": [],
     }
+    metadata = metadata or {}
     raw: dict[str, dict[str, Any]] = {}
     if store_raw:
         raw = {
             request.episode_id: _transcript_payload(
-                segments, language, language_code, backend
+                segments, language, language_code, backend, metadata
             )
         }
     return FetchResult(
-        items=[_transcript_item(request, response)],
+        items=[_transcript_item(request, response, metadata)],
         raw=raw,
         errors=[],
         effective_request=effective,
@@ -364,6 +409,7 @@ class PodcastTranscriptFetcher:
                 max_chars=max_chars,
                 effective=effective,
                 store_raw=False,
+                metadata=_stored_metadata(cached),
             )
 
         try:
@@ -379,7 +425,7 @@ class PodcastTranscriptFetcher:
                 "This feed publishes no transcript for that episode. Use "
                 "podcast_whisper_transcript to transcribe the audio locally.",
             )
-        segments, language, language_code = found
+        segments, language, language_code, episode = found
         return build_transcript_result(
             request,
             segments=segments,
@@ -389,11 +435,12 @@ class PodcastTranscriptFetcher:
             max_chars=max_chars,
             effective=effective,
             store_raw=True,
+            metadata=episode_metadata(episode),
         )
 
     async def _fetch_publisher_transcript(
         self, request: PodcastTranscriptRequest
-    ) -> tuple[list[TranscriptSegment], str | None, str | None] | None:
+    ) -> tuple[list[TranscriptSegment], str | None, str | None, PodcastEpisode] | None:
         """The first declared transcript that actually parses to something.
 
         Feeds declare formats they do not always serve -- one configured show
@@ -413,7 +460,7 @@ class PodcastTranscriptFetcher:
             except (UnsupportedTranscriptFormat, PodcastFeedError, UnicodeDecodeError):
                 continue
             if segments:
-                return segments, None, None
+                return segments, None, None, episode
         return None
 
 
@@ -470,6 +517,7 @@ class PodcastWhisperFetcher:
                 max_chars=max_chars,
                 effective=effective,
                 store_raw=False,
+                metadata=_stored_metadata(cached),
             )
 
         if not self._enabled:
@@ -483,12 +531,12 @@ class PodcastWhisperFetcher:
             )
 
         try:
-            audio_url = await self._audio_url(request)
+            episode = await self._episode(request)
         except PodcastFeedError as exc:
             return _transcript_error(
                 effective, request, exc.error_type, exc.message, backend="whisper"
             )
-        if audio_url is None:
+        if episode is None or not episode.audio_url:
             return _transcript_error(
                 effective,
                 request,
@@ -496,6 +544,7 @@ class PodcastWhisperFetcher:
                 "That episode is not in the feed, or it has no audio.",
                 backend="whisper",
             )
+        audio_url = episode.audio_url
 
         with tempfile.TemporaryDirectory(prefix="net-razor-audio-") as directory:
             destination = Path(directory) / f"{request.episode_id}.audio"
@@ -542,11 +591,11 @@ class PodcastWhisperFetcher:
             max_chars=max_chars,
             effective=effective,
             store_raw=True,
+            metadata=episode_metadata(episode),
         )
 
-    async def _audio_url(self, request: PodcastTranscriptRequest) -> str | None:
+    async def _episode(self, request: PodcastTranscriptRequest) -> PodcastEpisode | None:
         _show, episodes = await self._client.fetch_feed(request.feed_url)
-        episode = next(
+        return next(
             (item for item in episodes if item.episode_id == request.episode_id), None
         )
-        return episode.audio_url if episode is not None else None

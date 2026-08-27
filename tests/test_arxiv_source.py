@@ -61,9 +61,28 @@ def _source(handler, **kwargs) -> ArxivSource:
 # --------------------------------------------------------------------------- #
 # query construction -- the window has to reach arXiv, not be filtered locally
 # --------------------------------------------------------------------------- #
-def test_plain_text_becomes_an_all_fields_phrase_search():
+def test_a_multi_word_query_ands_its_terms_rather_than_matching_one_phrase():
+    """The whole query used to be quoted as one exact phrase, so any realistic
+    multi-word topic matched nothing and said so silently. Measured against the
+    live API: the phrase form returned 0 results where the ANDed form returned 27.
+    """
     query = build_search_query(ArxivRequest(query="retrieval augmented generation"), WINDOW)
-    assert 'all:"retrieval augmented generation"' in query
+    assert 'all:"retrieval" AND all:"augmented" AND all:"generation"' in query
+
+
+def test_a_single_word_query_is_still_one_term():
+    assert 'all:"agents"' in build_search_query(ArxivRequest(query="agents"), WINDOW)
+
+
+def test_a_caller_who_quotes_a_phrase_gets_a_phrase():
+    """Quoting is how you ask for an exact phrase now that it is not the default."""
+    query = build_search_query(ArxivRequest(query='"chain of thought" prompting'), WINDOW)
+    assert 'all:"chain of thought" AND all:"prompting"' in query
+
+
+def test_an_unbalanced_quote_does_not_lose_the_rest_of_the_query():
+    query = build_search_query(ArxivRequest(query='"chain of thought'), WINDOW)
+    assert 'all:"chain of thought"' in query
 
 
 def test_arxiv_field_syntax_is_passed_through_untouched():

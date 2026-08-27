@@ -153,8 +153,17 @@ fan-out.
 sees it. Sources receive the window and never ask what time it is. The resolved
 window is echoed back to the caller in `effective_request`.
 
-Each tool takes **one** clock reading and derives everything from it, so every
-leg of a fan-out shares an identical window.
+Each tool takes **one** clock reading and derives every window from it. Legs of
+a fan-out share that instant but not necessarily the same width: sources differ
+by an order of magnitude in cadence, so `research` resolves a window per leg from
+the `days` that leg's own request asked for. arXiv announces on weekdays only and
+widens itself to at least seven days; X moves in hours.
+
+Forcing one width on every leg was a real bug. The widening existed in
+`_arxiv_leg` but never took effect, because `research` resolved a single window
+up front and passed it down, so the leg's request was ignored and a default
+one-day research call searched arXiv over a single day and found nothing. Each
+source's resolved window is now reported back per source in the response.
 
 **4 · Compact for the caller, complete for the audit.** The response carries
 normalized `EvidenceItem`s only. Full upstream payloads go to the `raw` table,

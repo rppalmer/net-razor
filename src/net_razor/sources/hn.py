@@ -163,6 +163,19 @@ def _parse_datetime(value: Any):
     return parsed.astimezone(UTC)
 
 
+def _query_used(request: HNRequest) -> str:
+    """What was actually asked, for the audited item.
+
+    An empty query is a browse rather than a search, and recording it as an
+    empty string both fails validation and leaves a reader unable to tell a
+    browse from a bug.
+    """
+
+    if request.query:
+        return request.query
+    return "(browse: newest)" if request.sort == "latest" else "(browse)"
+
+
 def _normalize(
     payload: dict[str, Any], request: HNRequest
 ) -> tuple[list[EvidenceItem], dict[str, dict[str, Any]]]:
@@ -206,7 +219,7 @@ def _normalize(
                     likes=_non_negative_int(hit.get("points")),
                     replies=_non_negative_int(hit.get("num_comments")),
                 ),
-                query_used=request.query,
+                query_used=_query_used(request),
             )
         )
         raw[source_id] = hit

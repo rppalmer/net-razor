@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -157,3 +158,60 @@ def test_a_future_schema_stops_startup_with_an_instruction(tmp_path):
 
     with pytest.raises(AuditStoreSchemaError, match="delete the database"):
         AuditStore(tmp_path / "audit.db").initialize()
+
+
+# --------------------------------------------------------------------------- #
+# run_detail output size
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_run_detail_truncates_long_text_by_default(make_app, store, clock):
+    """A stored transcript appears twice -- once in the response, once in the
+    item -- so run_detail on a transcription returned 83,789 characters of which
+    729 was metadata. That exceeded the MCP output cap, making the record
+    unreadable exactly when someone needed it."""
+    recorder = AuditRecorder(store, clock)
+    long_text = "x" * 50_000
+    async with recorder.call(tool="podcast_transcript", source="podcast", request={}) as call:
+        item = EvidenceItem(
+            source="podcast", source_backend="whisper", source_id="ep-1",
+            item_type="transcript", canonical_url="https://example.com/feed.rss",
+            text=long_text, author=EvidenceAuthor(handle="f", display_name="f"),
+            published_at=datetime(2026, 7, 1, tzinfo=UTC), query_used="ep-1",
+        )
+        call.record(effective_request={}, items=[item], raw={}, errors=[])
+        call.set_response({"text": long_text})
+
+    detail = make_app().run_detail(call.id)
+
+    rendered = json.dumps(detail)
+    assert len(rendered) < 10_000, f"still {len(rendered)} characters"
+    assert "truncated" in rendered
+    assert "include_text" in rendered
+    # the metadata that makes the record useful is untouched
+    assert detail["call"]["tool"] == "podcast_transcript"
+    assert detail["items"][0]["item"]["source_id"] == "ep-1"
+
+
+@pytest.mark.asyncio
+async def test_run_detail_returns_everything_when_asked(make_app, store, clock):
+    recorder = AuditRecorder(store, clock)
+    long_text = "y" * 50_000
+    async with recorder.call(tool="podcast_transcript", source="podcast", request={}) as call:
+        call.record(effective_request={}, items=[], raw={}, errors=[])
+        call.set_response({"text": long_text})
+
+    detail = make_app().run_detail(call.id, include_text=True)
+
+    assert detail["call"]["response"]["text"] == long_text
+
+
+@pytest.mark.asyncio
+async def test_run_detail_leaves_short_text_alone(make_app, store, clock):
+    recorder = AuditRecorder(store, clock)
+    async with recorder.call(tool="hn_search", source="hn", request={}) as call:
+        call.record(effective_request={}, items=[], raw={}, errors=[])
+        call.set_response({"text": "short enough to read"})
+
+    detail = make_app().run_detail(call.id)
+
+    assert detail["call"]["response"]["text"] == "short enough to read"

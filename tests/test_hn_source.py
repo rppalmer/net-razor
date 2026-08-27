@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from net_razor.clock import resolve_window
 from net_razor.models import HNRequest
@@ -138,3 +139,48 @@ async def test_a_malformed_body_is_terminal_not_a_transient_failure():
 
     assert result.errors[0].type == "invalid_response"
     assert result.errors[0].model_dump()["retriable"] is False  # retrying can't fix it
+
+
+# --------------------------------------------------------------------------- #
+# Browsing without a search term
+# --------------------------------------------------------------------------- #
+def test_an_empty_hn_query_is_allowed_and_means_browse():
+    """There was no way to ask for the newest stories: query was required and
+    rejected an empty string, so "what is on Hacker News right now" had to go
+    around the server. Algolia treats an empty query as "everything", which
+    with sort=latest is exactly the newest submissions."""
+    assert HNRequest(query="").query == ""
+    assert HNRequest(query="   ").query == ""
+
+
+def test_x_and_arxiv_still_require_a_query():
+    """Only HN has a meaningful browse mode. X and arXiv would return an
+    arbitrary slice of everything, which is not a useful answer."""
+    from net_razor.models import ArxivRequest, XRequest
+
+    for model in (XRequest, ArxivRequest):
+        with pytest.raises(ValidationError):
+            model(query="")
+
+
+@pytest.mark.asyncio
+async def test_hn_sends_an_empty_query_upstream_rather_than_dropping_it():
+    client = _StubClient({"hits": []})
+
+    await HNSource(client).fetch(HNRequest(query="", sort="latest"), WINDOW)
+
+    request, _window = client.seen
+    assert request.query == ""
+
+
+@pytest.mark.asyncio
+async def test_browsing_records_what_was_asked_rather_than_an_empty_query():
+    """`query_used` must say something. An empty string fails validation, and
+    would anyway leave the audit unable to distinguish a browse from a bug."""
+    client = _StubClient(_PAYLOAD)
+
+    result = await HNSource(client).fetch(HNRequest(query="", sort="latest"), WINDOW)
+
+    assert result.items, "browsing returned no items"
+    assert result.items[0].query_used == "(browse: newest)"
+    assert result.effective_request["query"] == ""

@@ -1,4 +1,9 @@
+from datetime import UTC, datetime
+
+import pytest
+
 from net_razor.models import PodcastTranscriptRequest, TranscriptSegment
+from net_razor.sources.podcast.source import PodcastTranscriptFetcher
 
 SEGMENTS = [
     TranscriptSegment(text=f"Sentence number {n}.", start=float(n), duration=1.0)
@@ -102,3 +107,61 @@ async def test_no_publisher_transcript_is_a_handled_error_naming_the_other_tool(
     )
     assert response["errors"][0]["type"] == "no_transcript_found"
     assert "podcast_whisper_transcript" in response["errors"][0]["message"]
+
+
+# --------------------------------------------------------------------------- #
+# Episode metadata on the transcript item
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_a_transcript_item_carries_its_episode_metadata(make_app, store):
+    """Transcripts were stored with no title, the epoch as their date, and the
+    feed URL standing in for the show. That made a transcribed episode
+    unfindable later by show, title or date -- and the feed entry that supplies
+    all three had already been read minutes earlier."""
+    from tests.test_podcast_source import FakeFeedClient, _episode, _source
+
+    episode = _episode(
+        "ep-1", datetime(2026, 8, 14, tzinfo=UTC),
+        title="681: Ain't Nothing But a Syncthing",
+        transcript_urls=[("https://example.com/ep-1.vtt", "text/vtt")],
+    )
+    client = FakeFeedClient({"https://example.com/feed.rss": [episode]})
+    client.bodies = {
+        "https://example.com/ep-1.vtt":
+            b"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nhello\n",
+    }
+    app = make_app(podcast=_source(client), podcast_transcript=PodcastTranscriptFetcher(
+        feed_client=client))
+
+    response = await app.podcast_transcript(
+        PodcastTranscriptRequest(episode_id="ep-1", feed_url="https://example.com/feed.rss")
+    )
+
+    item = store.get_call(response["call_id"])["items"][0]["item"]
+    assert item["title"] == "681: Ain't Nothing But a Syncthing"
+    assert item["published_at"].startswith("2026-08-14")
+    assert item["author"]["display_name"] == "Example Show"
+    assert item["canonical_url"] == "https://example.com/ep-1"
+
+
+@pytest.mark.asyncio
+async def test_metadata_survives_being_served_from_the_store(make_app, store, clock):
+    """A cached serve does not read the feed, so the metadata has to be stored
+    with the transcript or the second call loses what the first one had."""
+    _seed(store, clock, call_id="c1", source="podcast", episode_id="ep-1",
+          payload=_payload() | {
+              "title": "A stored title",
+              "published_at": "2026-08-14T00:00:00+00:00",
+              "show_title": "Example Show",
+              "episode_url": "https://example.com/ep-1",
+          })
+    app = make_app()
+
+    response = await app.podcast_transcript(
+        PodcastTranscriptRequest(episode_id="ep-1", feed_url="https://example.com/feed.rss")
+    )
+
+    item = store.get_call(response["call_id"])["items"][0]["item"]
+    assert item["title"] == "A stored title"
+    assert item["published_at"].startswith("2026-08-14")
+    assert item["author"]["display_name"] == "Example Show"

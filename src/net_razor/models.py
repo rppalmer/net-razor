@@ -143,8 +143,18 @@ class XRequest(_TextQuery):
         return self
 
 
-class HNRequest(_TextQuery):
-    query: str
+class HNRequest(BaseModel):
+    """Search Hacker News, or browse it.
+
+    Unlike the other sources, an empty query is allowed and means "no search
+    term": with ``sort="latest"`` that is the newest submissions, which is how a
+    caller asks what is on Hacker News right now. Algolia treats an empty query
+    as matching everything, so this needs nothing special upstream.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    query: str = Field(default="", max_length=512)
     max_results: int = Field(default=25, ge=1, le=50)
     days: int = Field(default=1, ge=1, le=3650)
     since: date | None = None

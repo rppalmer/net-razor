@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ from net_razor.models import (
     ResearchRequest,
     ServiceErrorItem,
 )
-from tests.conftest import RecordingSource, stub_settings
+from tests.conftest import FIXED_NOW, RecordingSource, stub_settings
 
 
 def _hn_result(source_id: str = "1") -> FetchResult:
@@ -219,3 +219,45 @@ async def test_prune_reports_no_log_work_when_logging_to_stderr_only(make_app):
     app = make_app(settings=stub_settings(log_file=None))
 
     assert app.prune(before="2026-07-01T00:00:00+00:00")["log"] == {"removed": 0, "kept": 0}
+
+
+@pytest.mark.asyncio
+async def test_the_arxiv_leg_gets_its_wider_window_not_the_research_default(make_app):
+    """`_arxiv_leg` asks for at least 7 days because arXiv announces on weekdays
+    only. That widening was dead: research resolved one window from its own
+    `days` and handed it to every leg, so the leg's request was ignored and a
+    default 1-day research call searched arXiv over a single day."""
+    arxiv = RecordingSource("arxiv", FetchResult.empty({}))
+    hn = RecordingSource("hn", FetchResult.empty({}))
+    app = make_app(arxiv=arxiv, hn=hn)
+
+    await app.research(ResearchRequest(topic="agents", sources=["hn", "arxiv"], days=1))
+
+    assert (FIXED_NOW - hn.calls[0][1].since).days == 1
+    assert (FIXED_NOW - arxiv.calls[0][1].since).days == 7
+
+
+@pytest.mark.asyncio
+async def test_every_leg_still_derives_from_one_clock_reading(make_app):
+    """Windows may differ in width, but they must share an instant: two readings
+    would make the same request produce different upstream calls."""
+    arxiv = RecordingSource("arxiv", FetchResult.empty({}))
+    hn = RecordingSource("hn", FetchResult.empty({}))
+    app = make_app(arxiv=arxiv, hn=hn)
+
+    await app.research(ResearchRequest(topic="agents", sources=["hn", "arxiv"], days=1))
+
+    # Both windows end at the same instant, so the 7-day one starts exactly six
+    # days before the 1-day one. Two clock readings would break that by the
+    # microseconds between them.
+    assert arxiv.calls[0][1].since == hn.calls[0][1].since - timedelta(days=6)
+
+
+@pytest.mark.asyncio
+async def test_a_wide_research_window_is_not_narrowed_for_arxiv(make_app):
+    arxiv = RecordingSource("arxiv", FetchResult.empty({}))
+    app = make_app(arxiv=arxiv)
+
+    await app.research(ResearchRequest(topic="agents", sources=["arxiv"], days=30))
+
+    assert (FIXED_NOW - arxiv.calls[0][1].since).days == 30

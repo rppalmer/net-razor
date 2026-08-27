@@ -180,6 +180,33 @@ class ArxivSource:
         )
 
 
+# An unterminated quote runs to the end of the query rather than leaking a bare
+# `"` into a term, which would produce syntax arXiv rejects.
+_TERM = re.compile(r'"([^"]*)"?|(\S+)')
+
+
+def _all_fields(query: str) -> str:
+    """AND the query's terms across all fields, respecting quoted phrases.
+
+    This used to quote the whole query as one exact phrase, which meant any
+    realistic multi-word topic matched nothing -- and returned an empty result
+    set indistinguishable from "no such papers exist". Measured against the live
+    API, "LLM agent framework multi-agent orchestration" found 0 as a phrase and
+    27 as ANDed terms.
+
+    Each term is quoted individually. That returns identical results to bare
+    terms (measured: 919 either way) and keeps punctuation out of arXiv's query
+    grammar. A caller who wants a phrase quotes it themselves.
+    """
+
+    terms = [phrase or word for phrase, word in _TERM.findall(query)]
+    terms = [term.strip().replace('"', "") for term in terms]
+    terms = [term for term in terms if term]
+    if not terms:
+        return f'all:"{query}"'
+    return " AND ".join(f'all:"{term}"' for term in terms)
+
+
 def build_search_query(request: ArxivRequest, window: ResolvedWindow) -> str:
     """Compose arXiv's ``search_query`` from the request and the resolved window.
 
@@ -190,9 +217,9 @@ def build_search_query(request: ArxivRequest, window: ResolvedWindow) -> str:
 
     query = request.query.strip()
     if query:
-        # Respect arXiv field syntax when the caller used it; otherwise search all
-        # fields, quoted so a multi-word topic stays one phrase.
-        clauses.append(query if _FIELD_PREFIX.match(query) else f'all:"{query}"')
+        # Respect arXiv field syntax when the caller used it; otherwise AND the
+        # terms across all fields.
+        clauses.append(query if _FIELD_PREFIX.match(query) else _all_fields(query))
 
     if request.categories:
         categories = " OR ".join(f"cat:{c}" for c in request.categories)

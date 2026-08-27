@@ -75,6 +75,28 @@ class SourceEntry:
     build_request: Callable[[ResearchRequest], Any]  # its slice of a research fan-out
 
 
+# Long enough to recognise what a payload is, short enough that a whole record
+# fits comfortably inside a tool response.
+_DETAIL_TEXT_CAP = 800
+
+
+def _shorten_text(value: Any) -> Any:
+    """Shorten every long string in an audited record, structure untouched."""
+
+    if isinstance(value, str):
+        if len(value) <= _DETAIL_TEXT_CAP:
+            return value
+        return (
+            f"{value[:_DETAIL_TEXT_CAP]}… [truncated, {len(value):,} characters "
+            "total; call again with include_text=true for all of it]"
+        )
+    if isinstance(value, dict):
+        return {key: _shorten_text(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_shorten_text(item) for item in value]
+    return value
+
+
 def _x_leg(request: ResearchRequest) -> XRequest:
     return XRequest(
         query=request.topic, max_results=request.max_results_per_source,
@@ -279,22 +301,28 @@ class App:
         async with self.recorder.call(
             tool="research", source=None, request=request.model_dump(mode="json")
         ) as call:
-            window = resolve_window(
-                days=request.days, since=None, until=None, now=self.clock.now()
-            )
-            legs = [
-                (name, self.sources[name].build_request(request)) for name in request.sources
-            ]
+            # One clock reading for the whole fan-out, but each leg gets the width
+            # its own request asked for. Sources differ by an order of magnitude
+            # in cadence -- arXiv announces on weekdays only, so a one-day window
+            # finds nothing over a weekend, while X moves in hours. Forcing one
+            # width on all of them silently emptied the slowest source.
+            now = self.clock.now()
+            legs = []
+            for name in request.sources:
+                sub = self.sources[name].build_request(request)
+                legs.append(
+                    (name, sub, resolve_window(days=sub.days, since=None, until=None, now=now))
+                )
             results = await asyncio.gather(
                 *(
                     asyncio.wait_for(
                         self._search_tool(
                             f"{name}_search", self.sources[name].source, sub,
-                            parent_id=call.id, window=window,
+                            parent_id=call.id, window=leg_window,
                         ),
                         timeout=_LEG_DEADLINE_SECONDS,
                     )
-                    for name, sub in legs
+                    for name, sub, leg_window in legs
                 ),
                 return_exceptions=True,
             )
@@ -302,10 +330,11 @@ class App:
             sources_summary: dict[str, Any] = {}
             grouped: dict[str, list[dict[str, Any]]] = {}
             caveats: list[str] = []
-            for (name, _), result in zip(legs, results, strict=True):
+            for (name, _sub, leg_window), result in zip(legs, results, strict=True):
                 if isinstance(result, BaseException):
                     sources_summary[name] = {
                         "queried": True, "items_found": 0, "call_id": None,
+                        "window": leg_window.as_dict(),
                         "errors": [_leg_error(f"{name} search", result)],
                     }
                     grouped[name] = []
@@ -314,6 +343,9 @@ class App:
                         "queried": True,
                         "items_found": len(result["items"]),
                         "call_id": result["call_id"],
+                        # Per source: legs no longer all share one width, so a
+                        # single top-level window would misreport most of them.
+                        "window": leg_window.as_dict(),
                         "errors": result["errors"],
                     }
                     grouped[name] = result["items"]
@@ -331,7 +363,7 @@ class App:
             response = {
                 "call_id": call.id,
                 "topic": request.topic,
-                "window": window.as_dict(),
+                "requested_days": request.days,
                 "sources": sources_summary,
                 "results": grouped,
                 "caveats": caveats,
@@ -366,12 +398,21 @@ class App:
             ),
         }
 
-    def run_detail(self, call_id: str) -> dict[str, Any]:
+    def run_detail(self, call_id: str, *, include_text: bool = False) -> dict[str, Any]:
+        """One audited call. Long text is shortened unless ``include_text``.
+
+        A stored transcript lands in the record twice -- once in the response,
+        once in the item -- so this returned tens of thousands of characters for
+        a transcription and blew past the MCP output cap. The metadata is what
+        makes the record useful in forensics and it is under a kilobyte; the
+        transcript is what made it unreadable.
+        """
+
         detail = self.store.get_call(call_id)
         if detail is None:
             return {"error": {"type": "not_found", "message": "call not found",
                               "details": {"call_id": call_id}}}
-        return detail
+        return detail if include_text else _shorten_text(detail)
 
     # -- internals -----------------------------------------------------------
     async def _search_tool(

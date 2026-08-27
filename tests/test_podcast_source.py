@@ -29,9 +29,10 @@ def _episode(episode_id: str, when: datetime, **overrides) -> PodcastEpisode:
 
 
 class FakeFeedClient:
-    def __init__(self, by_feed=None, error=None):
+    def __init__(self, by_feed=None, error=None, bodies=None):
         self.by_feed = by_feed or {}
         self.error = error
+        self.bodies = bodies or {}
         self.calls: list[str] = []
 
     async def fetch_feed(self, feed_url: str):
@@ -39,6 +40,13 @@ class FakeFeedClient:
         if self.error is not None:
             raise self.error
         return "Example Show", self.by_feed.get(feed_url, [])
+
+    async def get(self, url: str) -> bytes:
+        """Transcript files the publisher declared, for the fetcher to download."""
+        self.calls.append(url)
+        if url not in self.bodies:
+            raise PodcastFeedError("request_failed", f"no stub body for {url}")
+        return self.bodies[url]
 
 
 def _source(client, feeds=("https://example.com/feed.rss",)) -> PodcastSource:

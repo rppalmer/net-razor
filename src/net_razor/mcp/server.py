@@ -54,10 +54,18 @@ def create_server(app: App | None = None) -> FastMCP:
         return net_razor_app.runs(limit=limit)
 
     @mcp.tool()
-    async def net_razor_run_detail(call_id: str) -> dict[str, Any]:
-        """Fetch one audited call (with its child calls, items, and errors) by ID."""
+    async def net_razor_run_detail(
+        call_id: str, include_text: bool = False
+    ) -> dict[str, Any]:
+        """Fetch one audited call (with its child calls, items, and errors) by ID.
 
-        return net_razor_app.run_detail(call_id)
+        Long text -- a transcript especially -- is shortened, because a full one
+        appears twice in the record and will not fit in a tool response. Set
+        include_text only when you actually need the body, and expect it to be
+        large.
+        """
+
+        return net_razor_app.run_detail(call_id, include_text=include_text)
 
     @mcp.tool()
     async def net_razor_x_search(
@@ -66,7 +74,15 @@ def create_server(app: App | None = None) -> FastMCP:
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
         mode: Literal["latest", "top"] = "latest",
     ) -> dict[str, Any]:
-        """Search X through the local runtime (audited)."""
+        """Search X through the local runtime (audited).
+
+        The query goes to X's own search unchanged, so its matching rules apply.
+        `latest` orders by recency and matches loosely, which on a broad topic
+        returns posts that merely share a common word -- use it when recency is
+        the point, or when the term is distinctive. `top` is better for topical
+        research. Quoting a phrase, or adding a distinguishing term, narrows
+        results far more than switching modes does.
+        """
 
         return await net_razor_app.x_search(
             XRequest(query=query, max_results=max_results, days=days, mode=mode)
@@ -74,12 +90,18 @@ def create_server(app: App | None = None) -> FastMCP:
 
     @mcp.tool()
     async def net_razor_hn_search(
-        query: str,
+        query: str = "",
         max_results: Annotated[int, Field(ge=1, le=50)] = 10,
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
         sort: Literal["latest", "relevance"] = "latest",
     ) -> dict[str, Any]:
-        """Search Hacker News through the local runtime (audited)."""
+        """Search Hacker News, or browse it (audited).
+
+        Leave query empty to browse rather than search: with sort="latest" that
+        is the newest submissions, which is how to answer "what is on Hacker
+        News right now". With sort="relevance" an empty query is close to
+        meaningless, so pair browsing with "latest".
+        """
 
         return await net_razor_app.hn_search(
             HNRequest(query=query, max_results=max_results, days=days, sort=sort)
@@ -102,7 +124,10 @@ def create_server(app: App | None = None) -> FastMCP:
 
         `categories` restricts to arXiv subject classes, e.g. ["cs.AI", "cs.CL"]
         (natural language), ["cs.LG"] (machine learning), ["cs.CR"] (security).
-        `query` accepts plain text, or arXiv field syntax like `ti:"..."` or `au:`.
+        `query` accepts plain text, whose words are ANDed across all fields, or
+        arXiv field syntax like `ti:"..."` or `au:`. Quote a phrase to require
+        the exact wording; unquoted words match a paper that contains all of
+        them anywhere.
 
         Note arXiv only announces on weekdays, so `days` under about 4 can return
         nothing over a weekend. There are no vote or comment counts on arXiv, so
