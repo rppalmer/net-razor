@@ -363,6 +363,12 @@ Available MCP tools:
 - `net_razor_podcast_whisper_transcript`
 - `net_razor_podcast_mark_processed`
 
+`net_razor_research` fans out to `x`, `hn` and `arxiv` by default, and returns results **grouped
+by source** — `results` is keyed by source name, and every item repeats its own `source`. Each
+source also gets the window its own cadence needs from one clock reading: arXiv widens to at least
+a week because it announces on weekdays only, while X and Hacker News use the days you asked for.
+Every leg's resolved window is reported back under `sources`.
+
 The tool schemas carry the constraints the server actually enforces — `mode` and `sort` expose
 their enums, `sources` exposes `["x","hn","arxiv"]`, and the integer parameters expose their ranges.
 A model can see what will be rejected instead of discovering it by being rejected.

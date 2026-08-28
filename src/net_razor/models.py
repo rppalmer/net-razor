@@ -16,6 +16,14 @@ from pydantic import (
 
 SourceName = Literal["x", "hn", "arxiv", "podcast"]
 
+# What a research call fans out to when the caller names no sources. Defined once
+# so the model and the MCP tool cannot drift apart.
+#
+# arXiv was absent while it returned nothing for every multi-word topic -- the
+# phrase-quoting bug, not a judgement about the source. Podcasts are excluded by
+# construction: they have no keyword search.
+DEFAULT_RESEARCH_SOURCES: tuple[SourceName, ...] = ("x", "hn", "arxiv")
+
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
 # An arXiv subject class: an archive, optionally a dotted subclass. "cs.AI", "math.AT", "econ".
@@ -207,7 +215,9 @@ class ResearchRequest(BaseModel):
 
     topic: str
     days: int = Field(default=1, ge=1, le=3650)
-    sources: list[SourceName] = Field(default_factory=lambda: ["x", "hn"], min_length=1)
+    sources: list[SourceName] = Field(
+        default_factory=lambda: list(DEFAULT_RESEARCH_SOURCES), min_length=1
+    )
     max_results_per_source: int = Field(default=25, ge=1, le=50)
 
     @field_validator("topic")

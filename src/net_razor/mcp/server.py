@@ -7,6 +7,7 @@ from pydantic import Field
 
 from net_razor.app import App, create_app
 from net_razor.models import (
+    DEFAULT_RESEARCH_SOURCES,
     ArxivRequest,
     HNRequest,
     PodcastMarkProcessedRequest,
@@ -30,13 +31,23 @@ def create_server(app: App | None = None) -> FastMCP:
         sources: list[SourceName] | None = None,
         max_results_per_source: Annotated[int, Field(ge=1, le=50)] = 10,
     ) -> dict[str, Any]:
-        """Fan out to the selected sources and return results grouped by source (unranked)."""
+        """Fan out to the selected sources and return results grouped by source (unranked).
+
+        Defaults to X, Hacker News and arXiv. `results` is keyed by source name
+        and every item repeats its own `source`, so an item's origin is never in
+        doubt -- attribute each one to the source it is filed under.
+
+        Each source gets the time window its own cadence needs from a single
+        clock reading, and reports it back under `sources`: arXiv widens to at
+        least a week because it only announces on weekdays, while X and Hacker
+        News use the days you asked for.
+        """
 
         return await net_razor_app.research(
             ResearchRequest(
                 topic=topic,
                 days=days,
-                sources=sources or ["x", "hn"],
+                sources=sources or list(DEFAULT_RESEARCH_SOURCES),
                 max_results_per_source=max_results_per_source,
             )
         )
@@ -78,10 +89,15 @@ def create_server(app: App | None = None) -> FastMCP:
 
         The query goes to X's own search unchanged, so its matching rules apply.
         `latest` orders by recency and matches loosely, which on a broad topic
-        returns posts that merely share a common word -- use it when recency is
-        the point, or when the term is distinctive. `top` is better for topical
-        research. Quoting a phrase, or adding a distinguishing term, narrows
+        returns posts that merely share a common word. `top` orders by
+        engagement. Quoting a phrase, or adding a distinguishing term, narrows
         results far more than switching modes does.
+
+        Judge X results by their text, not their engagement. On a niche topic
+        likes track how popular an account is, not how much a post says: a long
+        link roundup with real content often has zero, while a one-line joke has
+        hundreds. Length and substance are the signal here, and both are in the
+        item.
         """
 
         return await net_razor_app.x_search(

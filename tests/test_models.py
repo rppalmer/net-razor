@@ -71,3 +71,21 @@ def test_errors_tell_the_caller_whether_a_retry_could_help(error_type, retriable
 
     error = ServiceErrorItem(type=error_type, message="x")
     assert error.model_dump()["retriable"] is retriable
+
+
+def test_research_defaults_to_the_three_searchable_sources():
+    """arXiv was left out of the default when it was returning nothing for every
+    multi-word topic -- a consequence of the phrase-quoting bug, not a judgement
+    about the source. With that fixed it belongs in a default research call."""
+    assert ResearchRequest(topic="agents").sources == ["x", "hn", "arxiv"]
+
+
+def test_the_mcp_default_matches_the_model_default():
+    """The default lived in two places, so they could drift apart silently."""
+    import inspect
+
+    from net_razor.mcp import server
+
+    source = inspect.getsource(server)
+    assert "DEFAULT_RESEARCH_SOURCES" in source
+    assert '["x", "hn"]' not in source
