@@ -36,7 +36,7 @@ def test_configure_json_logging_quietens_mcp_request_logging() -> None:
     """The SDK logs a line per request, and a stdio host shows stderr to the user.
 
     Every call is already in the audit trail, so this removes noise rather than
-    information. Set on the library logger, since FastMCP also calls basicConfig
+    information. Set on the library logger, since MCPServer also calls basicConfig
     and owns root's level.
     """
     import logging

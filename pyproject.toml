@@ -10,9 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
-    # Upper bound on purpose: 2.x is a protocol-era change, and an unattended
-    # `pip install -U` must not move the server across it on its own.
-    "mcp>=1.9,<2",
+    # Upper bound on purpose, for the same reason the `<2` bound existed: an
+    # unattended `pip install -U` must not move the server across a protocol era
+    # on its own. 2.x speaks the 2026-07-28 revision and still serves every
+    # earlier one; the 1.x line is maintenance-only. 3.x will require the
+    # deprecations 2.2 warns about, so crossing to it stays a deliberate change.
+    "mcp>=2.2,<3",
     "pydantic-settings>=2.3",
 ]
 

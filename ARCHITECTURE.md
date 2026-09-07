@@ -18,7 +18,7 @@ that share one core:
           │                            │
           ▼                            ▼
     mcp/server.py                  cli/main.py          protocol adapters —
-    11 @mcp.tool wrappers          6 operational cmds    no logic lives here
+    11 @tool wrappers              6 operational cmds    no logic lives here
           │                            │
           └─────────────┬──────────────┘
                         ▼
@@ -249,8 +249,10 @@ To add one:
 1. Write `sources/<name>.py` — the actual work.
 2. Add one `SourceEntry` to the registry in `create_app()`.
 3. Add the name to `SourceName` in `models.py`.
-4. Add one `@mcp.tool()` wrapper in `mcp/server.py`, and a two-line `App` method
-   if it gets a dedicated tool.
+4. Add one `@tool` wrapper in `mcp/server.py`, and a two-line `App` method
+   if it gets a dedicated tool. `@tool` is `@mcp.tool()` plus the translation
+   that lets a request model's rejection reach the caller — use it, not the
+   SDK decorator directly, or the model is told only that the call failed.
 5. Add one entry to the registry in `tests/conftest.py`'s `make_app`.
 
 Steps 3 and 4 stay manual on purpose: the literal type is what makes the checker

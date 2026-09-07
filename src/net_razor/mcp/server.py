@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from functools import wraps
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
-from pydantic import Field
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field, ValidationError
 
 from net_razor.app import App, create_app
 from net_razor.models import (
@@ -19,11 +21,39 @@ from net_razor.models import (
 )
 
 
-def create_server(app: App | None = None) -> FastMCP:
-    net_razor_app = app or create_app()
-    mcp = FastMCP("net-razor")
+def _reports_rejections(handler):
+    """Let a request model's own rejection reach the caller.
 
-    @mcp.tool()
+    The SDK answers an unexpected handler exception with "Error executing tool
+    <name>" and keeps the rest in the server log. Tool signatures take plain
+    ``str``/``int`` and build the request model in the body, so every constraint
+    that is not an enum or a range is enforced here rather than by the schema --
+    and T20 exists so the model can see what it was rejected for. ``ToolError``
+    is the SDK's channel for a message meant to be read, so rejections take it.
+
+    Translation only: which arguments are invalid, and why, stays in ``models``.
+    """
+
+    @wraps(handler)
+    async def report(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await handler(*args, **kwargs)
+        except ValidationError as exc:
+            raise ToolError(str(exc)) from exc
+
+    return report
+
+
+def create_server(app: App | None = None) -> MCPServer:
+    net_razor_app = app or create_app()
+    mcp = MCPServer("net-razor")
+
+    def tool(handler):
+        """Register like ``mcp.tool()``, with rejections passed through."""
+
+        return mcp.tool()(_reports_rejections(handler))
+
+    @tool
     async def net_razor_research(
         topic: str,
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
@@ -51,19 +81,19 @@ def create_server(app: App | None = None) -> FastMCP:
             )
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_doctor() -> dict[str, Any]:
         """Report local Net-Razor setup diagnostics without exposing secrets."""
 
         return net_razor_app.doctor()
 
-    @mcp.tool()
+    @tool
     async def net_razor_runs(limit: Annotated[int, Field(ge=1, le=500)] = 20) -> dict[str, Any]:
         """List recent audited tool calls (most recent first)."""
 
         return net_razor_app.runs(limit=limit)
 
-    @mcp.tool()
+    @tool
     async def net_razor_run_detail(
         call_id: str, include_text: bool = False
     ) -> dict[str, Any]:
@@ -77,7 +107,7 @@ def create_server(app: App | None = None) -> FastMCP:
 
         return net_razor_app.run_detail(call_id, include_text=include_text)
 
-    @mcp.tool()
+    @tool
     async def net_razor_x_search(
         query: str,
         max_results: Annotated[int, Field(ge=1, le=50)] = 10,
@@ -103,7 +133,7 @@ def create_server(app: App | None = None) -> FastMCP:
             XRequest(query=query, max_results=max_results, days=days, mode=mode)
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_hn_search(
         query: str = "",
         max_results: Annotated[int, Field(ge=1, le=50)] = 10,
@@ -122,7 +152,7 @@ def create_server(app: App | None = None) -> FastMCP:
             HNRequest(query=query, max_results=max_results, days=days, sort=sort)
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_arxiv_search(
         query: str,
         max_results: Annotated[int, Field(ge=1, le=50)] = 25,
@@ -158,7 +188,7 @@ def create_server(app: App | None = None) -> FastMCP:
             )
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_podcast_whisper_transcript(
         episode_id: str,
         feed_url: str,
@@ -187,7 +217,7 @@ def create_server(app: App | None = None) -> FastMCP:
             )
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_podcast_transcript(
         episode_id: str,
         feed_url: str,
@@ -214,7 +244,7 @@ def create_server(app: App | None = None) -> FastMCP:
             )
         )
 
-    @mcp.tool()
+    @tool
     async def net_razor_podcast_feeds() -> dict[str, Any]:
         """The podcast shows this server is configured with, by name.
 
@@ -233,7 +263,7 @@ def create_server(app: App | None = None) -> FastMCP:
         """
         return await net_razor_app.podcast_feeds()
 
-    @mcp.tool()
+    @tool
     async def net_razor_podcast_new_episodes(
         days: Annotated[int, Field(ge=1, le=3650)] = 7,
         max_episodes_per_feed: Annotated[int, Field(ge=1, le=25)] = 5,

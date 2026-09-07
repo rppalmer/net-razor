@@ -3,10 +3,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from net_razor.cli.main import parse_args, run_command
 from net_razor.mcp.server import create_server
-from net_razor.models import EvidenceAuthor, EvidenceItem, FetchResult
+from net_razor.models import (
+    EvidenceAuthor,
+    EvidenceItem,
+    FetchResult,
+    ResearchRequest,
+    XRequest,
+)
 from tests.conftest import RecordingSource
 
 EXPECTED_TOOLS = {
@@ -57,6 +64,57 @@ async def test_mcp_hn_search_routes_through_app(make_app):
     await server.call_tool("net_razor_hn_search", {"query": "agents"})
     # a call was persisted (audit covers direct MCP tool calls)
     assert app.runs()["runs"], "expected an audited call"
+
+
+# T20 said the model should see the constraints it will be rejected for. Half of
+# that is the schema, which carries the enums and ranges; the other half is the
+# rejection itself saying which constraint was missed. The tool signatures take
+# plain str/int and build the request model in the body, so these constraints are
+# enforced by pydantic *inside* the handler -- and an MCP server decides for
+# itself how much of a handler exception the caller is told. Assert the reason
+# survives, or a validation message the model could act on becomes "call failed".
+@pytest.mark.parametrize(
+    ("tool", "arguments", "build_request"),
+    [
+        pytest.param(
+            "net_razor_x_search",
+            {"query": "   "},
+            lambda: XRequest(query="   "),
+            id="blank-query",
+        ),
+        pytest.param(
+            "net_razor_research",
+            {"topic": "   "},
+            lambda: ResearchRequest(topic="   "),
+            id="blank-topic",
+        ),
+        pytest.param(
+            "net_razor_research",
+            {"topic": "agents", "sources": ["podcast"]},
+            lambda: ResearchRequest(topic="agents", sources=["podcast"]),
+            id="podcast-has-no-topic-search",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_rejected_arguments_tell_the_caller_why(
+    make_app, tool, arguments, build_request
+):
+    """Whatever reason the request model gives, the caller is told it.
+
+    Pinning the wording here would only restate the validator. The property is
+    that the two agree: reword a message and this still holds; swallow it behind
+    a generic failure and it does not.
+    """
+    with pytest.raises(ValidationError) as rejection:
+        build_request()
+    reason = str(rejection.value)
+
+    server = create_server(make_app())
+    with pytest.raises(Exception) as reported:  # noqa: B017 -- type is SDK-specific
+        await server.call_tool(tool, arguments)
+
+    assert reason in str(reported.value)
 
 
 # --------------------------------------------------------------------------- #

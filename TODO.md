@@ -319,10 +319,51 @@ them would buy back sub-millisecond pauses in exchange for real complexity.
 
 ### T19 · Pin the MCP dependency — ✅ **done**
 
-`mcp>=1.9,<2`, matching what the LangGraph adapter pins. An unattended
-`pip install -U` or a fresh venv can no longer move the server across the protocol
-era boundary on its own; crossing it is now a deliberate, coordinated change.
-`requests` was declared in T1.
+An unattended `pip install -U` or a fresh venv cannot move the server across a
+protocol era on its own; crossing one is a deliberate, coordinated change. The
+bound was `mcp>=1.9,<2` when this was written and is now `mcp>=2.2,<3` — see T21,
+which is the deliberate crossing this pin was built to force. `requests` was
+declared in T1.
+
+### T21 · Move to the 2.x MCP SDK — ✅ **done 2026-09-07**
+
+The 1.x line went to maintenance-only when 2.0 shipped on 2026-07-28: security
+and critical fixes, nothing else. Staying was the larger risk, so the pin moved
+to `mcp>=2.2,<3` and the server now runs 2.2.0.
+
+The rename is the whole API change for us. `FastMCP` became `MCPServer` and moved
+to `mcp.server.mcpserver`. The old path is gone and raises on import rather than
+warning. The decorator API is untouched.
+
+**The part that was not free.** 2.1.0 changed how a handler exception is
+reported: the caller is told `Error executing tool <name>` and the reason stays
+in the server log. Tool signatures take plain `str`/`int` and build the request
+model in the body, so every constraint that is not an enum or a range is enforced
+*inside* the handler. Renaming alone would therefore have quietly undone half of
+T20 — the model would still see the constraints in the schema, but on getting one
+wrong would be told only that the call failed. Nothing in the suite covered it,
+because on 1.x it had always been true.
+
+`mcp/server.py` now registers through a local `@tool`, which is `@mcp.tool()`
+plus one translation: a `ValidationError` out of a tool body is re-raised as
+`ToolError`, which the SDK still passes through verbatim. It is applied once at
+registration rather than per tool, so the adapter keeps carrying no logic and a
+new tool cannot forget it. `tests/test_mcp_and_cli.py` pins the property — the
+reason the request model gives is the reason the caller is told — without pinning
+any wording, so rewording a validator does not break the test.
+
+**Verified, not assumed.** The 11 advertised tool schemas are byte-identical to
+what 1.29.1 produced. A 1.29.1 client still negotiates protocol `2025-11-25`
+against the 2.2.0 server, sees all 11 tools, and receives the full rejection
+text — so ORIS, which `langchain-mcp-adapters` pins to `mcp<2`, is unaffected and
+does not have to move with us.
+
+**What it costs.** About 15 MB of new transitive dependencies, 12 MB of which is
+`cryptography` arriving via `pyjwt[crypto]` for OAuth this server does not use.
+2.x also moves to `httpx2` while we still use `httpx` directly, so both are
+installed; they never meet, because a stdio server never touches the SDK's HTTP
+client. The redirect, idle-session and OAuth default changes in 2.2 are all
+HTTP-transport behaviour and do not reach us for the same reason.
 
 ---
 

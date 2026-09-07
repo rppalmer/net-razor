@@ -44,7 +44,7 @@ def configure_json_logging(level: str, log_file: Path | None = None) -> None:
     logging.basicConfig(level=level.upper(), format="%(message)s", handlers=handlers, force=True)
     for handler in logging.getLogger().handlers:
         handler.setFormatter(JsonFormatter())
-    # Set on the library logger itself, not on root: FastMCP calls basicConfig
+    # Set on the library logger itself, not on root: MCPServer calls basicConfig
     # too, so root's level is whatever it last decided.
     for name in NOISY_LOGGER_PREFIXES:
         logging.getLogger(name).setLevel(logging.WARNING)
