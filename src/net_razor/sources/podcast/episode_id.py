@@ -1,10 +1,10 @@
 """Stable identity for one podcast episode.
 
-A feed's ``<guid>`` is the publisher's own identifier and is what acknowledgement
-state is keyed on, so it has to survive a re-fetch unchanged. Some feeds omit it,
-so the audio URL is the fallback. Both are hashed to a short fixed-width id,
-because raw GUIDs are sometimes long URLs and sometimes opaque blobs, and the
-audit store keys on this.
+A feed's ``<guid>`` is the publisher's own identifier and is what a stored
+transcript is keyed on, so it has to survive a re-fetch unchanged: an id that
+moved would re-transcribe an episode already held. Some feeds omit it, so the
+audio URL is the fallback. Both are hashed to a short fixed-width id, because raw
+GUIDs are sometimes long URLs and sometimes opaque blobs.
 """
 
 from __future__ import annotations

@@ -428,7 +428,7 @@ into two surfaces.
 The composition root (`net_razor.app.create_app`) wires together:
 
 - A SQLite audit store at `~/.net-razor/data/net_razor_audit.db` by default (`calls`, `items`, `raw`,
-  `errors`, `podcast_processed_episodes`), written for every tool call by the audit recorder
+  `errors`), written for every tool call by the audit recorder
 - X search via the vendored, subprocess-isolated Node backend
 - Hacker News search via the Algolia HN API
 - arXiv search via the open arXiv API
