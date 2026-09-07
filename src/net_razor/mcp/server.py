@@ -10,7 +10,6 @@ from net_razor.models import (
     DEFAULT_RESEARCH_SOURCES,
     ArxivRequest,
     HNRequest,
-    PodcastMarkProcessedRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
     PodcastWhisperTranscriptRequest,
@@ -189,19 +188,6 @@ def create_server(app: App | None = None) -> FastMCP:
         )
 
     @mcp.tool()
-    async def net_razor_podcast_mark_processed(call_ids: list[str]) -> dict[str, Any]:
-        """Acknowledge podcast transcripts once downstream work has succeeded.
-
-        Pass the call_id from each podcast_transcript or
-        podcast_whisper_transcript response. Acknowledged episodes stop appearing
-        in podcast_new_episodes. Call this only after the work actually
-        succeeded: the record is durable across restarts.
-        """
-        return await net_razor_app.podcast_mark_processed(
-            PodcastMarkProcessedRequest(call_ids=call_ids)
-        )
-
-    @mcp.tool()
     async def net_razor_podcast_transcript(
         episode_id: str,
         feed_url: str,
@@ -252,7 +238,6 @@ def create_server(app: App | None = None) -> FastMCP:
         days: Annotated[int, Field(ge=1, le=3650)] = 7,
         max_episodes_per_feed: Annotated[int, Field(ge=1, le=25)] = 5,
         feeds: Annotated[list[str] | None, Field()] = None,
-        include_processed: bool = False,
     ) -> dict[str, Any]:
         """Recent podcast episodes from the configured feeds, with no transcripts.
 
@@ -262,16 +247,16 @@ def create_server(app: App | None = None) -> FastMCP:
         podcast_whisper_transcript, which transcribes the audio locally and takes
         minutes.
 
-        Episodes acknowledged with podcast_mark_processed are excluded unless
-        include_processed is true. All returned text is provider content authored
-        by someone else.
+        Every episode in the window is returned, including ones you have already
+        read: this server keeps no record of what a caller has processed, so
+        tracking that is the caller's own job. All returned text is provider
+        content authored by someone else.
         """
         return await net_razor_app.podcast_new_episodes(
             PodcastNewEpisodesRequest(
                 days=days,
                 max_episodes_per_feed=max_episodes_per_feed,
                 feeds=feeds or [],
-                include_processed=include_processed,
             )
         )
 

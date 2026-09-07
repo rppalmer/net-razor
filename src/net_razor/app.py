@@ -16,12 +16,10 @@ from net_razor.logging import configure_json_logging, prune_log_file
 from net_razor.models import (
     ArxivRequest,
     HNRequest,
-    PodcastMarkProcessedRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
     PodcastWhisperTranscriptRequest,
     ResearchRequest,
-    ServiceErrorItem,
     SourceName,
     XRequest,
 )
@@ -249,53 +247,15 @@ class App:
             return response
 
     async def podcast_new_episodes(self, request: PodcastNewEpisodesRequest) -> dict[str, Any]:
-        """Recent episodes, minus the ones already acknowledged.
+        """Every recent episode across the configured feeds.
 
-        The filter lives here rather than in the source: the source stays pure and
-        audit-unaware, and acknowledgement state belongs to the store.
+        Net-Razor holds no read state. Which of these a caller has already processed
+        is the caller's own record to keep -- a single set here would mean one
+        consumer's progress hiding episodes from every other consumer.
         """
-        response = await self._search_tool(
+        return await self._search_tool(
             "podcast_new_episodes", self.sources["podcast"].source, request
         )
-        if request.include_processed:
-            return response
-        processed = self.store.processed_podcast_episode_ids()
-        response["items"] = [
-            item for item in response["items"] if item["source_id"] not in processed
-        ]
-        return response
-
-    async def podcast_mark_processed(
-        self, request: PodcastMarkProcessedRequest
-    ) -> dict[str, Any]:
-        """Acknowledge episodes only after their downstream work succeeds."""
-        async with self.recorder.call(
-            tool="podcast_mark_processed", source="podcast",
-            request=request.model_dump(mode="json"),
-        ) as call:
-            acknowledged, unknown = self.store.acknowledge_podcast_transcripts(
-                transcript_call_ids=request.call_ids,
-                acknowledgement_call_id=call.id,
-                now=self.clock.now().isoformat(),
-            )
-            errors = [
-                ServiceErrorItem(
-                    type="unknown_call_id",
-                    message=f"No podcast transcript call found for {call_id}",
-                )
-                for call_id in unknown
-            ]
-            call.record(
-                effective_request=request.model_dump(mode="json"),
-                items=[], raw={}, errors=errors,
-            )
-            response = {
-                "call_id": call.id,
-                "acknowledged": acknowledged,
-                "errors": [error.model_dump(mode="json") for error in errors],
-            }
-            call.set_response(response)
-            return response
 
     async def research(self, request: ResearchRequest) -> dict[str, Any]:
         async with self.recorder.call(
@@ -383,10 +343,6 @@ class App:
 
         The log is included because nothing else ever shortens it -- there is no
         rotation, and this is the one command an operator runs to free space.
-
-        The acknowledgement tables are deliberately left alone. They are what
-        keeps an already-processed episode out of the queue, and that has to
-        outlive the transcript it refers to.
         """
 
         return {

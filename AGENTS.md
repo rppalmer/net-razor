@@ -64,10 +64,10 @@ Assert the property, not a literal that happens to hold today. A test that pins 
 
 ## Project Boundaries
 
-- Net-Razor owns retrieval of content it did not author, plus its own processed-video state. It is the only project here with that trust class.
+- Net-Razor owns retrieval of content it did not author. It is the only project here with that trust class.
 - Indicator enrichment and defensive reference knowledge belong to **ThreatSyft**. The two projects never call each other.
 - Synthesis, routing, and answer construction belong to the consuming agent (**ORIS**). Net-Razor returns evidence and stops.
-- A consumer may depend on processed-video acknowledgement being durable across process restarts. Do not move that state into memory.
+- Read state belongs to the consumer. Net-Razor records nothing about what has been read and returns every item in the window; a single set here would mean one consumer's progress hiding items from every other consumer.
 
 ## Deliberate Non-Goals
 

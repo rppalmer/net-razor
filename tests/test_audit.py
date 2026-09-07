@@ -149,6 +149,36 @@ def test_an_existing_unstamped_database_is_adopted_not_rejected(tmp_path):
     assert store.stats()["counts"]["calls"] == 0
 
 
+def test_a_database_holding_the_retired_acknowledgement_table_still_opens(tmp_path):
+    """Read state moved to the consumer, but the old rows stay readable.
+
+    They are the migration source, so startup must not reject them and must not
+    move the schema version -- either would force the database to be deleted, and
+    with it the acknowledgements that have not been copied out yet.
+    """
+    path = tmp_path / "audit.db"
+    AuditStore(path).initialize()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE podcast_processed_episodes ("
+            "episode_id TEXT PRIMARY KEY, transcript_call_id TEXT NOT NULL, "
+            "acknowledgement_call_id TEXT NOT NULL, processed_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO podcast_processed_episodes VALUES (?, ?, ?, ?)",
+            ("ep-1", "call-1", "ack-1", "2026-08-01T00:00:00+00:00"),
+        )
+
+    AuditStore(path).initialize()
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == _SCHEMA_VERSION
+        rows = connection.execute(
+            "SELECT episode_id FROM podcast_processed_episodes"
+        ).fetchall()
+    assert rows == [("ep-1",)]
+
+
 def test_a_future_schema_stops_startup_with_an_instruction(tmp_path):
     """Better a clear failure at startup than 'no such column' mid-call."""
     store = AuditStore(tmp_path / "audit.db")

@@ -18,7 +18,7 @@ that share one core:
           │                            │
           ▼                            ▼
     mcp/server.py                  cli/main.py          protocol adapters —
-    12 @mcp.tool wrappers          6 operational cmds    no logic lives here
+    11 @mcp.tool wrappers          6 operational cmds    no logic lives here
           │                            │
           └─────────────┬──────────────┘
                         ▼
@@ -211,24 +211,24 @@ Reads that serve content back:
   one without re-fetching. Returns `None` on a miss, which simply means a fetch;
   a pruned or deleted database costs speed, never correctness.
 
-`podcast_processed_episodes` is **application state, not audit data.** It survives
-`prune`, which is deliberate and covered by a test — pruning your history must
-not make the agent re-summarize everything.
+Nothing else reads back out. The store is a record, not a view: no query here
+decides what a tool returns. `stored_podcast_transcript()` is the one exception
+and it serves a payload rather than a judgement.
 
-Reads that drive behaviour, not just record it:
+Read state used to live here, in a `podcast_processed_episodes` table that was
+**application state rather than audit data** — the only thing in this database
+that was not a record of something that happened, and the only thing `prune` had
+to be taught to skip. It was also one global set with no notion of who read what,
+so any consumer's acknowledgement hid an item from every consumer. Read state is a
+fact about a reader, so it moved to the consumer. `podcast_new_episodes` now
+returns everything in its window and the caller filters.
 
-- `processed_podcast_episode_ids()` — backs the `podcast_new_episodes` work queue.
-
-This is why the audit trail is a database and not an append-only file: the app
-queries it on every call.
+The table is not dropped from databases that already have it. Those rows are the
+migration source, and an unread table costs nothing.
 
 **Retention:** none automatic. `prune --before <date>` is manual, and covers
 the log file as well as the database — the log has no rotation, so prune is the
 only thing that shortens it. Growth is roughly 30 KB per call.
-
-Pruning deliberately does not touch the acknowledgement tables. They are what
-keeps a processed episode out of its queue, and that has to outlive the
-transcript it refers to.
 
 **Schema changes:** `initialize()` stamps `PRAGMA user_version`, and
 `_READABLE_VERSIONS` lists what this build can open. Anything else stops at

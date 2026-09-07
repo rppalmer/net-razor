@@ -140,38 +140,6 @@ async def test_whisper_returns_a_stored_publisher_transcript_rather_than_re_tran
     assert response["text"] == "Speaker: hello."
 
 
-async def test_mark_processed_accepts_a_call_id_from_either_transcript_tool(
-    make_app, store, clock
-):
-    """A consumer passes whichever tool succeeded; both must resolve identically."""
-    from net_razor.models import PodcastMarkProcessedRequest
-
-    store.open_call(call_id="seed", parent_id=None, tool="seed", source="podcast",
-                    request={}, created_at=clock.now().isoformat())
-    store.record_payload(
-        call_id="seed", source="podcast", effective_request={}, items=[],
-        raw={"ep-1": {
-            "language": "en", "language_code": "en", "source_backend": "whisper",
-            "segment_count": 1,
-            "segments": [
-                TranscriptSegment(text="Hi.", start=0.0, duration=1.0).model_dump(mode="json")
-            ],
-        }},
-        errors=[], created_at=clock.now().isoformat(),
-    )
-    app = make_app(settings=stub_settings(podcast_whisper_enabled=True))
-
-    whisper_call = await app.podcast_whisper_transcript(
-        PodcastWhisperTranscriptRequest(episode_id="ep-1", feed_url="https://e.com/f.rss")
-    )
-    acknowledged = await app.podcast_mark_processed(
-        PodcastMarkProcessedRequest(call_ids=[whisper_call["call_id"]])
-    )
-
-    assert acknowledged["acknowledged"] == 1
-    assert store.processed_podcast_episode_ids() == {"ep-1"}
-
-
 async def test_paging_after_a_whisper_transcript_keeps_reporting_whisper(
     make_app, store, clock
 ):

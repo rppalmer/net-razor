@@ -256,3 +256,45 @@ async def test_podcast_feeds_tool_reports_a_broken_feed_as_a_handled_error(make_
     assert response["shows"] == []
     assert response["errors"][0]["type"] == "upstream_error"
     assert response["errors"][0]["retriable"] is True
+
+
+async def test_new_episodes_returns_every_episode_the_source_produced(make_app):
+    """Net-Razor keeps no read state, so the tool filters nothing out.
+
+    Asserts the property rather than a fixed list: whatever the source returns for
+    the window is what the caller gets. A filtering path reappearing here would
+    silently hide one consumer's episodes from another.
+    """
+    episodes = [
+        _episode("a", datetime(2026, 8, 12, tzinfo=UTC)),
+        _episode("b", datetime(2026, 8, 13, tzinfo=UTC)),
+        _episode("c", datetime(2026, 8, 14, tzinfo=UTC)),
+    ]
+    source = _source(FakeFeedClient({"https://example.com/feed.rss": episodes}))
+    app = make_app(podcast=source)
+    window = ResolvedWindow(
+        since=datetime(2026, 8, 10, tzinfo=UTC), until=datetime(2026, 8, 17, tzinfo=UTC)
+    )
+    request = PodcastNewEpisodesRequest(days=7, max_episodes_per_feed=10)
+    expected = await source.fetch(request, window)
+
+    response = await app.podcast_new_episodes(request)
+
+    assert [item["source_id"] for item in response["items"]] == [
+        item.source_id for item in expected.items
+    ]
+
+
+async def test_new_episodes_returns_the_same_episodes_when_called_twice(make_app):
+    """Nothing a caller does through this server removes an episode from the list."""
+    source = _source(FakeFeedClient({
+        "https://example.com/feed.rss": [_episode("a", datetime(2026, 8, 12, tzinfo=UTC))]
+    }))
+    app = make_app(podcast=source)
+    request = PodcastNewEpisodesRequest(days=7)
+
+    first = await app.podcast_new_episodes(request)
+    second = await app.podcast_new_episodes(request)
+
+    assert [item["source_id"] for item in first["items"]] == ["a"]
+    assert [item["source_id"] for item in second["items"]] == ["a"]

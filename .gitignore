@@ -72,3 +72,6 @@ _reference/
 
 # Local-only Git history backups
 .git-history-backup*/
+
+# Handoff notes describing another project's internals. Local only.
+docs/oris-handoff-read-state.md

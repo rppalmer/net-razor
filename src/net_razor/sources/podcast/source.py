@@ -136,7 +136,6 @@ class PodcastSource:
             "feeds": feeds,
             "days": request.days,
             "max_episodes_per_feed": request.max_episodes_per_feed,
-            "include_processed": request.include_processed,
             **window.as_dict(),
         }
 

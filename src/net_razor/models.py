@@ -264,10 +264,6 @@ class PodcastWhisperTranscriptRequest(BaseModel):
     max_chars: int | None = Field(default=None, ge=1000)
 
 
-class PodcastMarkProcessedRequest(BaseModel):
-    call_ids: list[str] = Field(min_length=1, max_length=100)
-
-
 class PodcastTranscriptRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -280,8 +276,10 @@ class PodcastTranscriptRequest(BaseModel):
 class PodcastNewEpisodesRequest(BaseModel):
     """Lightweight discovery: recent episodes across feeds, no transcripts.
 
-    The work queue for the incremental flow -- list new episodes, then process one
-    at a time so only one transcript is ever in context.
+    Every episode in the window comes back. Net-Razor keeps no record of what has
+    been read: that is the consumer's own state, because two consumers legitimately
+    disagree about it. The consumer filters, then processes one episode at a time so
+    only one transcript is ever in context.
     """
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -292,9 +290,6 @@ class PodcastNewEpisodesRequest(BaseModel):
     since: date | None = None
     until: date | None = None
     max_episodes_per_feed: int = Field(default=5, ge=1, le=25)
-    # By default only episodes not yet acknowledged are returned (a durable queue);
-    # set True to include ones already processed.
-    include_processed: bool = False
 
 
 # --------------------------------------------------------------------------- #

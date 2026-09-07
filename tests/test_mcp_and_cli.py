@@ -20,7 +20,6 @@ EXPECTED_TOOLS = {
     "net_razor_podcast_feeds",
     "net_razor_podcast_new_episodes",
     "net_razor_podcast_transcript",
-    "net_razor_podcast_mark_processed",
     "net_razor_podcast_whisper_transcript",
 }
 

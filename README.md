@@ -102,7 +102,7 @@ the fastest way to catch a file written to the wrong place.
 
 **Setting up a second machine** means installing as above and copying those three files across.
 Do not copy the database: it is created on first run, and a fresh one is the correct starting
-state for the podcast queue.
+state.
 
 **Precedence:** a variable already present in the process environment **overrides** `.env`,
 silently and with no warning. That matters if your MCP host populates `env:` in its server
@@ -214,10 +214,9 @@ One transcript in context at a time, rather than hours of text at once.
 | Tool | What it does |
 | --- | --- |
 | `podcast_feeds` | The configured shows, by name, and which publish transcripts. |
-| `podcast_new_episodes` | Recent episodes across the feeds. Descriptions, no transcripts. |
+| `podcast_new_episodes` | Every recent episode across the feeds. Descriptions, no transcripts. |
 | `podcast_transcript` | The show's own transcript, paged. Immediate when it exists. |
 | `podcast_whisper_transcript` | Transcribes the audio locally. Minutes, not seconds. |
-| `podcast_mark_processed` | Acknowledges episodes so they leave the queue, durably. |
 
 ### Which shows are configured
 
@@ -361,7 +360,6 @@ Available MCP tools:
 - `net_razor_podcast_new_episodes`
 - `net_razor_podcast_transcript`
 - `net_razor_podcast_whisper_transcript`
-- `net_razor_podcast_mark_processed`
 
 `net_razor_research` fans out to `x`, `hn` and `arxiv` by default, and returns results **grouped
 by source** — `results` is keyed by source name, and every item repeats its own `source`. Each
@@ -457,14 +455,12 @@ calls, its normalized items, and its errors; upstream payloads stay in the `raw`
 than a date, and drops log lines from the same period out of `LOG_FILE` — nothing rotates that
 file, so this is the only thing that ever shortens it. It reports both counts.
 
-Acknowledged-episode state survives pruning, so clearing history does not
-make the agent re-summarize everything. The consequence is worth knowing: prune an old episode
-and you lose its transcript while keeping the mark saying you already handled it. It stays out of
-the queue, and asking for its transcript again re-fetches from scratch.
+Pruning an old episode loses its transcript, so asking for it again re-fetches from scratch.
+Nothing else is affected: this server keeps no record of what you have already read, so clearing
+history cannot make a consumer re-summarize anything.
 
 **The database is expendable.** If a future version can't read it, the server stops at startup
-and tells you to delete it — deleting costs you history and the acknowledged-episode list, not
-the ability to run.
+and tells you to delete it — deleting costs you history, not the ability to run.
 
 **What `raw` actually holds.** HN stores the complete Algolia hit; arXiv the complete Atom entry;
 podcast discovery the parsed feed entry; and both podcast transcript paths store the **complete**
