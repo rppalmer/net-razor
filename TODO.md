@@ -325,6 +325,38 @@ bound was `mcp>=1.9,<2` when this was written and is now `mcp>=2.2,<3` — see T
 which is the deliberate crossing this pin was built to force. `requests` was
 declared in T1.
 
+### T22 · Stop writing feed URLs to the log — ✅ **done 2026-09-07**
+
+From the Net-Syphon consistency review. `AGENTS.md` said "never log a
+credential" and described a redaction filter on the clients that emit URLs.
+There was no such filter, so the rule described a property the code did not
+have — the thing the testing rule warns about, in a document rather than a test.
+
+`httpx` logs one line per request at INFO and that line is the full URL. A
+per-account podcast feed URL carries a subscriber token in its path, so an
+ordinary `podcast_feeds` call wrote a credential to stderr and, when `LOG_FILE`
+is set, to disk.
+
+Fixed both ways, because they cover different cases. `httpx` joins the quiet
+list, which removes the routine request line. A `RedactingFilter` on `httpx` and
+`httpcore` keeps the host and replaces path, query and any `user:password@`,
+so a URL still reaching a warning or an error loses the part that can carry a
+secret. The host is what says which provider was reached, and is the diagnostic
+value of the line.
+
+Two other findings from the same review were looked at and not done:
+
+- **`extra="forbid"` on the request models would not do what it looks like.**
+  A bogus tool argument is dropped by the SDK's generated arguments model before
+  any Net-Razor code runs, and the request models are built from named
+  parameters inside the tool body, so they never see it. The real exposure is
+  that `x_search` takes `mode` while `hn_search` and `arxiv_search` take `sort`,
+  so a model passing `sort` to `x_search` silently gets `latest`. Fixable only
+  by reaching into `_tool_manager` and `fn_metadata.arg_model`, which are
+  private; verified to work, deliberately not adopted.
+- **Returning failures as MCP errors** is blocked on ORIS and stays blocked.
+  See the review's section 4.
+
 ### T21 · Move to the 2.x MCP SDK — ✅ **done 2026-09-07**
 
 The 1.x line went to maintenance-only when 2.0 shipped on 2026-07-28: security

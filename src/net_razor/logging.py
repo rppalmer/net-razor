@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,49 @@ class JsonFormatter(logging.Formatter):
 # for the protocol and shows stderr to the user, so on an interactive host that
 # arrives in the middle of whatever they are reading. Net-Razor's own audit
 # trail already records every call, so this adds nothing the operator lacks.
-NOISY_LOGGER_PREFIXES = ("mcp.server",)
+#
+# `httpx` is here for a second reason: its per-request INFO line is the full
+# URL. A per-account podcast feed URL carries a subscriber token in its path, so
+# that line is a credential written to stderr and to LOG_FILE.
+NOISY_LOGGER_PREFIXES = ("mcp.server", "httpx")
+
+# Quietening alone is not enough, because a warning or an error from these
+# carries URLs too. AGENTS.md puts the redaction on the clients that actually
+# emit URLs rather than on root, so Net-Razor's own logging is left alone.
+URL_EMITTING_LOGGERS = ("httpx", "httpcore")
+
+_URL = re.compile(r"https?://[^\s\"'<>\\]+")
+
+
+def _redact_url(match: re.Match[str]) -> str:
+    """Keep the host, drop everything that can carry a secret.
+
+    The host says which provider was reached, which is the diagnostic value of
+    the line. The path, query and any userinfo are what hold subscriber tokens
+    and signed parameters, and none of them are worth keeping to debug with.
+    """
+
+    url = match.group(0)
+    scheme, _, rest = url.partition("://")
+    host = rest.split("/")[0].split("?")[0].split("#")[0]
+    # https://user:password@host strips to the host.
+    host = host.rpartition("@")[2]
+    remainder = rest[len(rest.split("/")[0].split("?")[0].split("#")[0]) :]
+    if remainder.strip("/"):
+        return f"{scheme}://{host}/<redacted>"
+    return f"{scheme}://{host}"
+
+
+class RedactingFilter(logging.Filter):
+    """Strip the secret-bearing part of any URL in a log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _URL.sub(_redact_url, message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 def configure_json_logging(level: str, log_file: Path | None = None) -> None:
@@ -48,6 +91,10 @@ def configure_json_logging(level: str, log_file: Path | None = None) -> None:
     # too, so root's level is whatever it last decided.
     for name in NOISY_LOGGER_PREFIXES:
         logging.getLogger(name).setLevel(logging.WARNING)
+    for name in URL_EMITTING_LOGGERS:
+        logger = logging.getLogger(name)
+        if not any(isinstance(f, RedactingFilter) for f in logger.filters):
+            logger.addFilter(RedactingFilter())
 
 
 def _line_timestamp(line: str) -> datetime | None:

@@ -49,6 +49,43 @@ def test_configure_json_logging_quietens_mcp_request_logging() -> None:
     assert logging.getLogger("mcp.server.lowlevel.server").getEffectiveLevel() == logging.WARNING
 
 
+def test_configure_json_logging_quietens_http_client_request_logging() -> None:
+    """`httpx` logs one line per request at INFO, and that line is the full URL.
+
+    A per-account podcast feed URL carries a subscriber token in its path, so
+    the routine request log is a credential written to stderr and to LOG_FILE.
+    """
+    logging.getLogger("httpx").setLevel(logging.NOTSET)
+
+    configure_json_logging("INFO", None)
+
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
+def test_a_url_reaching_the_log_loses_its_path(tmp_path) -> None:
+    """Quietening is not enough on its own: a warning or an error carries URLs too.
+
+    AGENTS.md requires the redaction to sit on the client loggers that actually
+    emit URLs. Assert the secret-bearing part is gone rather than pinning the
+    replacement, so the format can change without rewriting this.
+    """
+    secret = "s3cr3t-subscriber-token"
+    log_file = tmp_path / "net-razor.log"
+    configure_json_logging("INFO", log_file)
+    try:
+        logging.getLogger("httpx").warning(
+            "HTTP Request: GET https://feeds.example.com/%s/rss \"HTTP/1.1 302\"", secret
+        )
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        written = log_file.read_text()
+    finally:
+        configure_json_logging("INFO", None)
+
+    assert secret not in written, "the token survived into the log"
+    assert "feeds.example.com" in written, "the host is diagnostic and should survive"
+
+
 # --------------------------------------------------------------------------- #
 # Pruning the log file alongside the audit store
 # --------------------------------------------------------------------------- #
