@@ -44,7 +44,7 @@ and the read-state table exists as its own SQLite store. The failure above was
 reproduced against a stale ORIS checkout. Do not build read state on ORIS's
 behalf; it is already there.
 
-## 2. Full request URLs go to stderr, and the redaction filter does not exist
+## 2. Full request URLs go to stderr, and the redaction filter does not exist — done 2026-09-07
 
 `AGENTS.md` says: "Never log a credential. The redaction filter belongs on the
 client loggers that actually emit URLs, not on the root logger."
@@ -78,7 +78,12 @@ the wrong fix. Two options, in order of preference:
 Either way, the sentence in `AGENTS.md` should stop describing a control that is
 not there. That sentence is worse than nothing, because it gets believed.
 
-## 3. Tool inputs silently accept unknown arguments
+**Done: both options, not one.** `httpx` is quietened to WARNING, and
+`RedactingFilter` now sits on the client loggers that emit URLs, keeping the host
+and dropping the path, query and any userinfo. The sentence in `AGENTS.md`
+describes a control that exists.
+
+## 3. Tool inputs silently accept unknown arguments — done 2026-09-08
 
 Net-Razor's request models use `ConfigDict(str_strip_whitespace=True)` and nothing
 else. No `extra="forbid"`, no `strict=True`. The advertised input schemas have no
@@ -95,6 +100,14 @@ specific mistake worth catching.
 
 **What to do here.** Add `extra="forbid"` to the request models. Strict typing is
 a bigger change and can wait, but forbidding extras is close to free.
+
+**Done, and it needed more than the request models.** They forbid extras now, but
+that alone changed nothing on the wire: the MCP adapter passes named arguments,
+so an unknown one was dropped by the SDK's own generated argument model before it
+ever reached ours. `_reject_unknown_arguments` in `mcp/server.py` reconfigures
+that model after registration and regenerates the published input schema from it,
+so the schema and the enforcement agree. A caller passing `provider` now gets a
+rejection naming `provider`.
 
 ## 4. Errors are returned as ordinary results, not MCP errors
 
@@ -122,7 +135,32 @@ failure and adapt.
 **Order of work:** decide how ORIS should surface a failed Net-Razor tool call to
 its model, change ORIS, then change Net-Razor. Not the other way round.
 
-## 5. Tools advertise no annotations
+**Scope settled with ORIS, 2026-09-08. Still not started here.** Only whole-call
+failures become MCP errors. A per-item failure inside an otherwise successful
+result stays in the payload: a podcast run that reads six of eight feeds must
+return six lists and two errors, because turning that into a hard error destroys
+six working feeds to report two broken ones.
+
+The line: it is a call error when nothing about the request could have worked --
+a rejected argument, an unusable call ID, an unconfigured source when that source
+is the only one the tool uses. It stays in the payload when it belongs to one
+item inside a call that otherwise did its job. The same error type therefore
+lands on both sides of that line: `not_configured` from `x_search` alone is a
+call error, while the identical code from the X leg of `research` is payload,
+because the other legs returned evidence. A consumer must key on how the failure
+arrives, not on the code.
+
+Decided rather than discovered: if every leg of a fan-out fails, it stays a
+successful result carrying all the errors. Marking it a hard error would collapse
+eight specific per-feed reasons into one exception message.
+
+ORIS built its error boundary on 2026-09-07 and it reads both the current and the
+future wire shapes. One piece of ORIS work comes first: the typed error is caught
+at only one of four call sites, so feeds listing, episode discovery and Community
+Research would each end a run on an error the boundary already knows how to
+describe.
+
+## 5. Tools advertise no annotations — done 2026-09-08
 
 Every Net-Razor tool comes back with `annotations: None`.
 
@@ -136,7 +174,7 @@ tools has something to read.
 
 Cheap to add and it makes an existing invariant visible.
 
-## 6. Output schemas are empty
+## 6. Output schemas are empty — done 2026-09-08
 
 Because the tools return `dict[str, Any]`, FastMCP generates this:
 
@@ -154,7 +192,7 @@ shapes exist; they are just not declared at the boundary. This is the largest it
 in this document and the one with the clearest payoff, because it makes the
 response contract checkable rather than conventional.
 
-## 7. There is no import-safety test
+## 7. There is no import-safety test — done 2026-09-08
 
 A stdio MCP server dies if anything writes to stdout, because stdout carries the
 protocol. Nothing in the test suite checks that importing the package is silent.
@@ -175,7 +213,7 @@ assert list(tmp_path.iterdir()) == []
 About ten lines, and it catches a whole class of failure that is otherwise found
 by a host mysteriously refusing to start.
 
-## 8. There is no wire-level protocol test
+## 8. There is no wire-level protocol test — done 2026-09-08
 
 `scripts/mcp_smoke.py` exists but is a script, so it is not part of any run.
 
@@ -210,7 +248,7 @@ One thing to watch: the 2.x SDK already refuses the `initialize` handshake on it
 own modern connections. If a future release drops handshake-era support, ORIS's
 1.x client stops being able to connect to either server.
 
-## 10. Lint and dependency hygiene are lighter
+## 10. Lint and dependency hygiene are lighter — done 2026-09-08
 
 | | Net-Razor | Net-Syphon |
 | --- | --- | --- |
@@ -225,6 +263,28 @@ subprocess, handles cookies and writes files, it is worth turning on.
 
 The lock file matters most. Net-Razor's tests run against whatever happens to be
 installed, so "the tests passed" is not reproducible.
+
+**Done, with one deliberate exception.** Ruff now runs
+`B C4 E F I N PERF RUF S SIM UP`, `requires-python` is bounded to 3.12 with a
+`.python-version`, and `pip-audit` is documented in `AGENTS.md` -- it reports no
+known vulnerabilities across the 305 locked packages.
+
+`ruff format --check` was **not** adopted. Running it reformats 34 files and
+2,649 lines of deliberately hand-formatted code, buys no correctness, and would
+make `git blame` useless across the repository. If that trade ever changes, the
+place to change it is the comment in `[tool.ruff.lint]`.
+
+The two findings worth reading are the ones that were suppressed rather than
+fixed. `S314` fires where untrusted RSS and arXiv XML is parsed with the standard
+library. Ruff wants `defusedxml`; the behaviour was measured instead, and on the
+pinned interpreter expat already refuses a billion-laughs payload
+("limit on input amplification factor breached") and never resolves an external
+entity. That protection belongs to expat, which ships with the interpreter, which
+is the real reason `requires-python` got an upper bound.
+`tests/test_podcast_feed_client.py` asserts both refusals, so an interpreter
+without them fails the suite rather than quietly parsing a bomb. The `S608`
+suppressions in `audit/store.py` are table names from literal tuples and runs of
+`?` placeholders; no caller value is ever interpolated.
 
 ---
 

@@ -30,7 +30,7 @@ from net_razor.models import (
 from net_razor.sources.podcast.audio import AudioDownloadError, download_audio
 from net_razor.sources.podcast.feed_client import PodcastEpisode, PodcastFeedError
 from net_razor.sources.podcast.transcript_formats import (
-    UnsupportedTranscriptFormat,
+    UnsupportedTranscriptFormatError,
     parse_transcript,
 )
 from net_razor.sources.podcast.whisper_runner import WhisperError, run_whisper
@@ -130,7 +130,9 @@ class PodcastSource:
         return shows, errors
 
     async def fetch(self, request: object, window: ResolvedWindow) -> FetchResult:
-        assert isinstance(request, PodcastNewEpisodesRequest)
+        # A programming error, not a caller error: Source.fetch is duck-typed,
+        # so this narrows the type rather than validating input.
+        assert isinstance(request, PodcastNewEpisodesRequest)  # noqa: S101
         feeds = request.feeds or self._configured_feeds
         effective: dict[str, Any] = {
             "feeds": feeds,
@@ -153,6 +155,11 @@ class PodcastSource:
                     )
                 ],
                 effective_request=effective,
+                # Zero, not absent. This is the only path that returned a
+                # different set of fields from the others, so a caller reading
+                # feed_count found nothing there exactly when the answer was
+                # the interesting one.
+                meta={"feed_count": 0},
             )
 
         semaphore = asyncio.Semaphore(FEED_CONCURRENCY)
@@ -456,7 +463,7 @@ class PodcastTranscriptFetcher:
             try:
                 body = await self._client.get(url)
                 segments = parse_transcript(body.decode("utf-8", "replace"), mime_type)
-            except (UnsupportedTranscriptFormat, PodcastFeedError, UnicodeDecodeError):
+            except (UnsupportedTranscriptFormatError, PodcastFeedError, UnicodeDecodeError):
                 continue
             if segments:
                 return segments, None, None, episode

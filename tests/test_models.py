@@ -6,12 +6,26 @@ import pytest
 from pydantic import ValidationError
 
 from net_razor.models import (
+    ArxivRequest,
     EvidenceAuthor,
     EvidenceItem,
     HNRequest,
+    PodcastNewEpisodesRequest,
+    PodcastTranscriptRequest,
+    PodcastWhisperTranscriptRequest,
     ResearchRequest,
     XRequest,
 )
+
+REQUEST_MODELS = [
+    ArxivRequest,
+    HNRequest,
+    PodcastNewEpisodesRequest,
+    PodcastTranscriptRequest,
+    PodcastWhisperTranscriptRequest,
+    ResearchRequest,
+    XRequest,
+]
 
 
 def test_evidence_item_has_no_raw_field():
@@ -89,3 +103,21 @@ def test_the_mcp_default_matches_the_model_default():
     source = inspect.getsource(server)
     assert "DEFAULT_RESEARCH_SOURCES" in source
     assert '["x", "hn"]' not in source
+
+
+@pytest.mark.parametrize("model", REQUEST_MODELS, ids=lambda m: m.__name__)
+def test_no_request_accepts_an_argument_it_does_not_define(model):
+    """Asserted across every request, not on one of them.
+
+    A new request model that forgets this would otherwise accept a hallucinated
+    parameter and drop it, which leaves the caller believing a filter ran.
+    """
+
+    assert model.model_config.get("extra") == "forbid"
+
+
+def test_an_unknown_argument_names_itself_in_the_rejection():
+    """The caller is usually a model, and it can only correct what it is told."""
+
+    with pytest.raises(ValidationError, match="provider"):
+        HNRequest(query="agents", provider="reddit")

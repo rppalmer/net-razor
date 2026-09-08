@@ -50,6 +50,13 @@ _RETRIABLE_ERROR_TYPES = frozenset({
 class ServiceErrorItem(BaseModel):
     """A handled error, safe to return to the caller and persist to the audit store."""
 
+    # ``retriable`` is computed, so it appears when this is dumped but not in the
+    # validation-mode JSON schema, which is the one the MCP SDK advertises. The
+    # override makes the published schema describe what a caller actually
+    # receives -- otherwise the field a consumer most wants to branch on is the
+    # one field the contract does not mention.
+    model_config = ConfigDict(json_schema_mode_override="serialization")
+
     type: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
@@ -119,7 +126,12 @@ class TranscriptSegment(BaseModel):
 # Requests (capture user intent; time is resolved at the tool edge)
 # --------------------------------------------------------------------------- #
 class _TextQuery(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    # Every request model refuses an argument it does not define, rather than
+    # dropping it. A caller that invented a parameter otherwise gets a normal
+    # result and believes a filter was applied that never was. The MCP boundary
+    # enforces the same rule on its own generated schema; see
+    # ``_reject_unknown_arguments`` in ``mcp/server.py``.
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     @field_validator("query", check_fields=False)
     @classmethod
@@ -160,7 +172,7 @@ class HNRequest(BaseModel):
     as matching everything, so this needs nothing special upstream.
     """
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     query: str = Field(default="", max_length=512)
     max_results: int = Field(default=25, ge=1, le=50)
@@ -211,7 +223,7 @@ class ArxivRequest(_TextQuery):
 
 
 class ResearchRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     topic: str
     days: int = Field(default=1, ge=1, le=3650)
@@ -256,7 +268,7 @@ class ResearchRequest(BaseModel):
 
 
 class PodcastWhisperTranscriptRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     episode_id: str
     feed_url: str
@@ -265,7 +277,7 @@ class PodcastWhisperTranscriptRequest(BaseModel):
 
 
 class PodcastTranscriptRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     episode_id: str
     feed_url: str
@@ -282,7 +294,7 @@ class PodcastNewEpisodesRequest(BaseModel):
     only one transcript is ever in context.
     """
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     # Empty means "every configured feed". A caller may narrow to specific feed URLs.
     feeds: list[str] = Field(default_factory=list)

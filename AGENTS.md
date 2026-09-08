@@ -31,6 +31,7 @@ This is the trust class that justifies Net-Razor being a separate project. Do no
 - Prefer explicit, single-purpose, read-only tools. Net-Razor reads; it never posts, votes, deletes, or otherwise writes to a provider.
 - Never hardcode credentials, tokens, cookies, or machine-specific paths. Use `.env`, which is gitignored.
 - Never log a credential. The redaction filter belongs on the client loggers that actually emit URLs, not on the root logger.
+- Every tool declares its response shape and refuses arguments it does not define. A returned field the response model does not know about is dropped before the caller sees it, so `responses.py` has to keep up with `app.py`; `tests/test_response_contract.py` fails when it does not.
 - Adding a source follows `ARCHITECTURE.md` §"Adding a source". Adding a *tool* needs a reason the existing surface cannot cover.
 
 ## Testing
@@ -49,6 +50,20 @@ Assert the property, not a literal that happens to hold today. A test that pins 
 ./.venv/bin/python -m pytest
 ./.venv/bin/python -m ruff check .
 ```
+
+`tests/test_protocol.py` is the only file that runs the real server, over real
+stdio, and checks each response against the schema the server advertised. It
+calls just the tools that refuse before building an HTTP client, so it stays
+inside the no-network rule; read its module docstring before adding a call to it.
+
+Before a release, or after changing a dependency:
+
+```shell
+uv export --format requirements-txt --no-hashes --all-extras | uv run --with pip-audit pip-audit -r /dev/stdin
+```
+
+`ruff format` is deliberately not run here. Reformatting the project is a
+~2,600-line diff over hand-formatted code, and it buys nothing a reader notices.
 
 ## Where things live
 

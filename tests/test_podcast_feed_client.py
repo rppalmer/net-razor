@@ -96,3 +96,44 @@ async def test_malformed_xml_is_terminal_not_a_network_fault():
     with pytest.raises(PodcastFeedError) as excinfo:
         await client.fetch_feed("https://example.com/feed.rss")
     assert excinfo.value.error_type == "invalid_response"
+
+
+# A feed is XML written by a stranger, so the parser is on the trust boundary.
+# These two payloads are the classic attacks against it.
+ENTITY_BOMB = """<?xml version="1.0"?>
+<!DOCTYPE lolz [
+ <!ENTITY lol "lol">
+ <!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+ <!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;">
+ <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+ <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+ <!ENTITY lol5 "&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;">
+ <!ENTITY lol6 "&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;">
+]>
+<rss><channel><title>&lol6;</title></channel></rss>"""
+
+EXTERNAL_ENTITY = """<?xml version="1.0"?>
+<!DOCTYPE r [<!ENTITY secret SYSTEM "file:///etc/passwd">]>
+<rss><channel><title>&secret;</title></channel></rss>"""
+
+
+@pytest.mark.parametrize(
+    ("payload", "attack"),
+    [(ENTITY_BOMB, "entity expansion"), (EXTERNAL_ENTITY, "external entity")],
+)
+async def test_a_hostile_feed_is_refused_rather_than_parsed(payload, attack):
+    """Why this project does not depend on defusedxml.
+
+    The standard library parser is safe here because expat refuses both attacks
+    itself: it caps entity amplification, and it never resolves an external
+    entity. That protection is a property of the expat the interpreter ships
+    with, not of this code, which is why ``requires-python`` is bounded and why
+    this test exists -- on an interpreter without it, this fails instead of the
+    server quietly reading a local file or exhausting its own memory.
+    """
+
+    client = _client(lambda request: httpx.Response(200, text=payload))
+
+    with pytest.raises(PodcastFeedError) as excinfo:
+        await client.fetch_feed("https://example.com/feed.rss")
+    assert excinfo.value.error_type == "invalid_response", f"{attack} was not refused"

@@ -32,7 +32,7 @@ _SRT_TYPES = {"application/x-subrip", "application/srt", "text/srt"}
 _JSON_TYPES = {"application/json", "application/json+podcast"}
 
 
-class UnsupportedTranscriptFormat(Exception):
+class UnsupportedTranscriptFormatError(Exception):
     def __init__(self, mime_type: str) -> None:
         super().__init__(f"unsupported transcript format: {mime_type!r}")
         self.mime_type = mime_type
@@ -80,10 +80,10 @@ def _parse_json(body: str) -> list[TranscriptSegment]:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
-        raise UnsupportedTranscriptFormat("application/json") from exc
+        raise UnsupportedTranscriptFormatError("application/json") from exc
     raw_segments = payload.get("segments") if isinstance(payload, dict) else None
     if not isinstance(raw_segments, list):
-        raise UnsupportedTranscriptFormat("application/json")
+        raise UnsupportedTranscriptFormatError("application/json")
 
     segments: list[TranscriptSegment] = []
     for entry in raw_segments:
@@ -110,4 +110,4 @@ def parse_transcript(body: str, mime_type: str) -> list[TranscriptSegment]:
         return _parse_cues(body)
     if normalized in _JSON_TYPES:
         return _parse_json(body)
-    raise UnsupportedTranscriptFormat(mime_type)
+    raise UnsupportedTranscriptFormatError(mime_type)

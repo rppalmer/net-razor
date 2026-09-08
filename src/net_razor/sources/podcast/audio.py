@@ -75,26 +75,25 @@ async def _stream_to_file(
     try:
         async with httpx.AsyncClient(
             timeout=timeout_seconds, transport=transport, follow_redirects=True
-        ) as client:
-            async with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as response:
-                if response.status_code >= 400:
-                    error_type = _STATUS_ERRORS.get(response.status_code)
-                    if error_type is None:
-                        error_type = (
-                            "upstream_error" if response.status_code >= 500 else "request_failed"
-                        )
-                    raise AudioDownloadError(
-                        error_type, f"The episode audio returned HTTP {response.status_code}"
+        ) as client, client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as response:
+            if response.status_code >= 400:
+                error_type = _STATUS_ERRORS.get(response.status_code)
+                if error_type is None:
+                    error_type = (
+                        "upstream_error" if response.status_code >= 500 else "request_failed"
                     )
-                with destination.open("wb") as handle:
-                    async for piece in response.aiter_bytes():
-                        written += len(piece)
-                        if written > max_bytes:
-                            raise AudioDownloadError(
-                                "audio_too_large",
-                                f"The episode audio exceeded {max_bytes} bytes",
-                            )
-                        handle.write(piece)
+                raise AudioDownloadError(
+                    error_type, f"The episode audio returned HTTP {response.status_code}"
+                )
+            with destination.open("wb") as handle:
+                async for piece in response.aiter_bytes():
+                    written += len(piece)
+                    if written > max_bytes:
+                        raise AudioDownloadError(
+                            "audio_too_large",
+                            f"The episode audio exceeded {max_bytes} bytes",
+                        )
+                    handle.write(piece)
     except AudioDownloadError:
         destination.unlink(missing_ok=True)
         raise

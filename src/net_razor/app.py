@@ -20,6 +20,7 @@ from net_razor.models import (
     PodcastTranscriptRequest,
     PodcastWhisperTranscriptRequest,
     ResearchRequest,
+    ServiceErrorItem,
     SourceName,
     XRequest,
 )
@@ -45,18 +46,26 @@ _log = logging.getLogger("net_razor.app")
 
 
 def _leg_error(what: str, exc: BaseException) -> dict[str, Any]:
-    """Turn a failed or timed-out fan-out leg into an error the caller can act on."""
+    """Turn a failed or timed-out fan-out leg into an error the caller can act on.
+
+    Built through ``ServiceErrorItem`` rather than as a bare dict so it carries
+    ``retriable`` like every other error. These two types are both retriable, so
+    hand-rolling the dict dropped the flag from exactly the failures most worth
+    trying again.
+    """
     if isinstance(exc, TimeoutError):
-        return {
-            "type": "timeout",
-            "message": f"{what} exceeded the {_LEG_DEADLINE_SECONDS:.0f}s leg deadline",
-            "details": {"deadline_seconds": _LEG_DEADLINE_SECONDS},
-        }
-    return {
-        "type": "request_failed",
-        "message": f"{what} failed",
-        "details": {"reason": str(exc)},
-    }
+        error = ServiceErrorItem(
+            type="timeout",
+            message=f"{what} exceeded the {_LEG_DEADLINE_SECONDS:.0f}s leg deadline",
+            details={"deadline_seconds": _LEG_DEADLINE_SECONDS},
+        )
+    else:
+        error = ServiceErrorItem(
+            type="request_failed",
+            message=f"{what} failed",
+            details={"reason": str(exc)},
+        )
+    return error.model_dump(mode="json")
 
 
 @dataclass(frozen=True)
@@ -403,9 +412,11 @@ class App:
                 "items": [item.model_dump(mode="json") for item in result.items],
                 "errors": [error.model_dump(mode="json") for error in result.errors],
             }
-            for key, value in result.meta.items():
-                if key != "response":
-                    response[key] = value
+            # "response" is the pre-shaped payload the transcript tools use;
+            # every other meta key is a per-source extra that belongs on top.
+            response.update(
+                {key: value for key, value in result.meta.items() if key != "response"}
+            )
             call.set_response(response)
             return response
 

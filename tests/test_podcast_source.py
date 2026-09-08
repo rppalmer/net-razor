@@ -13,18 +13,18 @@ WINDOW = ResolvedWindow(
 
 
 def _episode(episode_id: str, when: datetime, **overrides) -> PodcastEpisode:
-    defaults = dict(
-        episode_id=episode_id,
-        feed_url="https://example.com/feed.rss",
-        show_title="Example Show",
-        title=f"Episode {episode_id}",
-        published_at=when,
-        duration_seconds=1800,
-        audio_url=f"https://cdn.example.com/{episode_id}.mp3",
-        episode_url=f"https://example.com/{episode_id}",
-        description="Notes",
-        transcript_urls=[],
-    )
+    defaults = {
+        "episode_id": episode_id,
+        "feed_url": "https://example.com/feed.rss",
+        "show_title": "Example Show",
+        "title": f"Episode {episode_id}",
+        "published_at": when,
+        "duration_seconds": 1800,
+        "audio_url": f"https://cdn.example.com/{episode_id}.mp3",
+        "episode_url": f"https://example.com/{episode_id}",
+        "description": "Notes",
+        "transcript_urls": [],
+    }
     return PodcastEpisode(**{**defaults, **overrides})
 
 

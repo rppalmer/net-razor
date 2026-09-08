@@ -111,7 +111,7 @@ async def test_rejected_arguments_tell_the_caller_why(
     reason = str(rejection.value)
 
     server = create_server(make_app())
-    with pytest.raises(Exception) as reported:  # noqa: B017 -- type is SDK-specific
+    with pytest.raises(Exception) as reported:
         await server.call_tool(tool, arguments)
 
     assert reason in str(reported.value)
@@ -213,7 +213,7 @@ async def test_every_tool_resolves_the_application_create_server_built(monkeypat
     for tool in tools:
         try:
             await server.call_tool(tool.name, _minimal_arguments(tool))
-        except Exception as exc:  # noqa: BLE001 - the failure text is the assertion
+        except Exception as exc:
             if "'NoneType' object has no attribute" in str(exc):
                 failed.append(tool.name)
     assert failed == []

@@ -7,7 +7,12 @@ name = "net-razor"
 version = "0.1.0"
 description = "MCP-first local research runtime for X, Hacker News, arXiv, and podcasts."
 readme = "README.md"
-requires-python = ">=3.11"
+# Bounded on purpose, for the same reason the mcp pin is. The XML parsing this
+# project does on untrusted feeds is safe because of expat's entity-amplification
+# limit, and expat ships with the interpreter -- so which interpreter runs is
+# part of a security property, not just a compatibility detail. See
+# tests/test_podcast_feed_client.py for the property that pins it.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "httpx>=0.27",
     # Upper bound on purpose, for the same reason the `<2` bound existed: an
@@ -26,6 +31,10 @@ whisper = [
     "mlx-whisper>=0.4",
 ]
 dev = [
+    # Validates a tool response against the schema the server advertised, which
+    # is a different claim from validating it against the Pydantic model the
+    # schema came from. Used by tests/test_protocol.py.
+    "jsonschema>=4.0",
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
@@ -49,11 +58,22 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["_reference"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# `S` is bandit's security checks. This project runs a subprocess, handles
+# session cookies and parses XML from strangers, so they earn their place.
+# `ruff format` is deliberately not run: the diff is ~2,600 lines of
+# hand-formatted code with no correctness gain, and it would make git blame
+# useless across the whole repository.
+select = ["B", "C4", "E", "F", "I", "N", "PERF", "RUF", "S", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, pass fake credentials, and launch subprocesses on purpose.
+# Every one of these outside tests is still a finding.
+"tests/*" = ["S101", "S105", "S106", "S603"]
+"scripts/*" = ["S101"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

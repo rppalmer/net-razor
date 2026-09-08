@@ -96,7 +96,18 @@ class PodcastFeedClient:
     async def fetch_feed(self, feed_url: str) -> tuple[str, list[PodcastEpisode]]:
         body = await self.get(feed_url)
         try:
-            root = ET.fromstring(body)
+            # Suppressed below. Ruff wants defusedxml here, and this parses XML
+            # written by a stranger, so the concern is right. It was measured
+            # rather than assumed: on the interpreter this project pins, expat
+            # refuses a billion-laughs payload outright, and an external entity
+            # is undefined rather than fetched. defusedxml would add a
+            # dependency for protection that is already present.
+            #
+            # That protection comes from expat, which ships with the
+            # interpreter -- which is why requires-python has an upper bound.
+            # The test below this file's name asserts the refusal, so an
+            # interpreter without it fails the suite rather than parsing a bomb.
+            root = ET.fromstring(body)  # noqa: S314
         except ET.ParseError as exc:
             raise PodcastFeedError(
                 "invalid_response", "The podcast feed was not valid XML"

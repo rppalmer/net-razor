@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 from pydantic import Field, ValidationError
 
 from net_razor.app import App, create_app
@@ -18,6 +19,16 @@ from net_razor.models import (
     ResearchRequest,
     SourceName,
     XRequest,
+)
+from net_razor.responses import (
+    ArxivSearchResponse,
+    HNSearchResponse,
+    PodcastFeedsResponse,
+    PodcastNewEpisodesResponse,
+    PodcastTranscriptResponse,
+    ResearchResponse,
+    RunsResponse,
+    XSearchResponse,
 )
 
 
@@ -48,18 +59,38 @@ def create_server(app: App | None = None) -> MCPServer:
     net_razor_app = app or create_app()
     mcp = MCPServer("net-razor")
 
-    def tool(handler):
-        """Register like ``mcp.tool()``, with rejections passed through."""
+    def tool(*, open_world: bool = True):
+        """Register like ``mcp.tool()``, with rejections passed through.
 
-        return mcp.tool()(_reports_rejections(handler))
+        Every tool is annotated read-only and non-destructive, because that is a
+        standing rule of the project rather than a property of any one tool:
+        Net-Razor reads, and never posts, votes, deletes or otherwise writes to
+        a provider. The annotation says so to a host that offers to
+        auto-approve safe tools, which previously had nothing to read.
 
-    @tool
+        ``open_world`` is the one part that differs. It is true for a tool that
+        reaches an outside provider, and false for the three that only report on
+        this machine.
+        """
+
+        annotations = ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            open_world_hint=open_world,
+        )
+
+        def register(handler):
+            return mcp.tool(annotations=annotations)(_reports_rejections(handler))
+
+        return register
+
+    @tool()
     async def net_razor_research(
         topic: str,
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
         sources: list[SourceName] | None = None,
         max_results_per_source: Annotated[int, Field(ge=1, le=50)] = 10,
-    ) -> dict[str, Any]:
+    ) -> ResearchResponse:
         """Fan out to the selected sources and return results grouped by source (unranked).
 
         Defaults to X, Hacker News and arXiv. `results` is keyed by source name
@@ -81,19 +112,19 @@ def create_server(app: App | None = None) -> MCPServer:
             )
         )
 
-    @tool
+    @tool(open_world=False)
     async def net_razor_doctor() -> dict[str, Any]:
         """Report local Net-Razor setup diagnostics without exposing secrets."""
 
         return net_razor_app.doctor()
 
-    @tool
-    async def net_razor_runs(limit: Annotated[int, Field(ge=1, le=500)] = 20) -> dict[str, Any]:
+    @tool(open_world=False)
+    async def net_razor_runs(limit: Annotated[int, Field(ge=1, le=500)] = 20) -> RunsResponse:
         """List recent audited tool calls (most recent first)."""
 
         return net_razor_app.runs(limit=limit)
 
-    @tool
+    @tool(open_world=False)
     async def net_razor_run_detail(
         call_id: str, include_text: bool = False
     ) -> dict[str, Any]:
@@ -107,13 +138,13 @@ def create_server(app: App | None = None) -> MCPServer:
 
         return net_razor_app.run_detail(call_id, include_text=include_text)
 
-    @tool
+    @tool()
     async def net_razor_x_search(
         query: str,
         max_results: Annotated[int, Field(ge=1, le=50)] = 10,
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
         mode: Literal["latest", "top"] = "latest",
-    ) -> dict[str, Any]:
+    ) -> XSearchResponse:
         """Search X through the local runtime (audited).
 
         The query goes to X's own search unchanged, so its matching rules apply.
@@ -133,13 +164,13 @@ def create_server(app: App | None = None) -> MCPServer:
             XRequest(query=query, max_results=max_results, days=days, mode=mode)
         )
 
-    @tool
+    @tool()
     async def net_razor_hn_search(
         query: str = "",
         max_results: Annotated[int, Field(ge=1, le=50)] = 10,
         days: Annotated[int, Field(ge=1, le=3650)] = 1,
         sort: Literal["latest", "relevance"] = "latest",
-    ) -> dict[str, Any]:
+    ) -> HNSearchResponse:
         """Search Hacker News, or browse it (audited).
 
         Leave query empty to browse rather than search: with sort="latest" that
@@ -152,14 +183,14 @@ def create_server(app: App | None = None) -> MCPServer:
             HNRequest(query=query, max_results=max_results, days=days, sort=sort)
         )
 
-    @tool
+    @tool()
     async def net_razor_arxiv_search(
         query: str,
         max_results: Annotated[int, Field(ge=1, le=50)] = 25,
         days: Annotated[int, Field(ge=1, le=3650)] = 7,
         categories: list[str] | None = None,
         sort: Literal["submitted", "relevance", "updated"] = "submitted",
-    ) -> dict[str, Any]:
+    ) -> ArxivSearchResponse:
         """Search arXiv preprints and return their abstracts (audited).
 
         Use this for research papers — the primary source that AI/ML discussion on
@@ -188,13 +219,13 @@ def create_server(app: App | None = None) -> MCPServer:
             )
         )
 
-    @tool
+    @tool()
     async def net_razor_podcast_whisper_transcript(
         episode_id: str,
         feed_url: str,
         offset: Annotated[int, Field(ge=0)] = 0,
         max_chars: Annotated[int | None, Field(ge=1000)] = None,
-    ) -> dict[str, Any]:
+    ) -> PodcastTranscriptResponse:
         """Transcribe a podcast episode's audio locally with Whisper.
 
         EXPENSIVE AND SLOW. This downloads the episode and transcribes it on this
@@ -217,13 +248,13 @@ def create_server(app: App | None = None) -> MCPServer:
             )
         )
 
-    @tool
+    @tool()
     async def net_razor_podcast_transcript(
         episode_id: str,
         feed_url: str,
         offset: Annotated[int, Field(ge=0)] = 0,
         max_chars: Annotated[int | None, Field(ge=1000)] = None,
-    ) -> dict[str, Any]:
+    ) -> PodcastTranscriptResponse:
         """A podcast episode's transcript as published by the show, if it has one.
 
         Immediate and cheap, and when a show publishes one it usually identifies
@@ -244,8 +275,8 @@ def create_server(app: App | None = None) -> MCPServer:
             )
         )
 
-    @tool
-    async def net_razor_podcast_feeds() -> dict[str, Any]:
+    @tool()
+    async def net_razor_podcast_feeds() -> PodcastFeedsResponse:
         """The podcast shows this server is configured with, by name.
 
         Use this to answer "which podcasts can you cover?" -- the configuration
@@ -263,12 +294,12 @@ def create_server(app: App | None = None) -> MCPServer:
         """
         return await net_razor_app.podcast_feeds()
 
-    @tool
+    @tool()
     async def net_razor_podcast_new_episodes(
         days: Annotated[int, Field(ge=1, le=3650)] = 7,
         max_episodes_per_feed: Annotated[int, Field(ge=1, le=25)] = 5,
         feeds: Annotated[list[str] | None, Field()] = None,
-    ) -> dict[str, Any]:
+    ) -> PodcastNewEpisodesResponse:
         """Recent podcast episodes from the configured feeds, with no transcripts.
 
         A compact queue for deciding what to read. Episode text is the publisher's
@@ -290,7 +321,44 @@ def create_server(app: App | None = None) -> MCPServer:
             )
         )
 
+    _reject_unknown_arguments(mcp)
     return mcp
+
+
+def _reject_unknown_arguments(mcp: MCPServer) -> None:
+    """Make every tool refuse an argument it does not define.
+
+    Without this a caller can pass anything -- ``provider``, ``max_pages``, a
+    misspelled parameter -- and get a normal result with the argument quietly
+    dropped. A model that invented the argument is told nothing, so it believes
+    a filter was applied that never was. Refusing is the only answer that does
+    not mislead.
+
+    The SDK builds its own argument model from each tool signature and does not
+    expose a setting for this, so the model is reconfigured after registration
+    and the published input schema regenerated from it. Both halves matter: a
+    schema that says ``additionalProperties: false`` while the server still
+    accepts extras would be a documented control that does not exist.
+
+    ``_tool_manager`` is private to the SDK, hence the explicit check -- an
+    upgrade that renames it must fail here with a reason rather than silently
+    going back to accepting anything. ``tests/test_protocol.py`` proves the
+    refusal actually reaches the wire.
+    """
+
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:  # pragma: no cover -- an SDK change, not a code path
+        raise RuntimeError(
+            "This MCP SDK no longer exposes _tool_manager, so unknown tool "
+            "arguments can no longer be refused. Find the supported equivalent "
+            "before shipping: silently dropping them is what this replaced."
+        )
+
+    for tool in manager.list_tools():
+        arguments = tool.fn_metadata.arg_model
+        arguments.model_config["extra"] = "forbid"
+        arguments.model_rebuild(force=True)
+        tool.parameters = arguments.model_json_schema(by_alias=True)
 
 
 def main() -> None:

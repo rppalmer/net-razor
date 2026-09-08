@@ -6,12 +6,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from net_razor.models import (
+    ArxivRequest,
     EvidenceAuthor,
     EvidenceItem,
     FetchResult,
     HNRequest,
     ResearchRequest,
     ServiceErrorItem,
+    XRequest,
 )
 from tests.conftest import FIXED_NOW, RecordingSource, stub_settings
 
@@ -130,10 +132,6 @@ async def test_run_detail_unknown_call(make_app):
 @pytest.mark.asyncio
 async def test_research_builds_every_leg_from_the_source_registry(make_app):
     """The registry is the single place a source is declared — legs come from it."""
-    from net_razor.models import ArxivRequest as _Arxiv
-    from net_razor.models import HNRequest as _HN
-    from net_razor.models import XRequest as _X
-
     x = RecordingSource("x", FetchResult.empty({}))
     hn = RecordingSource("hn", FetchResult.empty({}))
     arxiv = RecordingSource("arxiv", FetchResult.empty({}))
@@ -145,9 +143,9 @@ async def test_research_builds_every_leg_from_the_source_registry(make_app):
     )
 
     # each source got the request type its own registry entry builds...
-    assert isinstance(x.calls[0][0], _X)
-    assert isinstance(hn.calls[0][0], _HN)
-    assert isinstance(arxiv.calls[0][0], _Arxiv)
+    assert isinstance(x.calls[0][0], XRequest)
+    assert isinstance(hn.calls[0][0], HNRequest)
+    assert isinstance(arxiv.calls[0][0], ArxivRequest)
     # ...carrying the shared parameters from the research request
     assert x.calls[0][0].days == hn.calls[0][0].days == 3
     assert x.calls[0][0].max_results == 7

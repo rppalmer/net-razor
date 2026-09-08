@@ -119,7 +119,7 @@ def test_a_closed_window_sends_both_bounds():
     assert "submittedDate:[202608020000 TO 202608090000]" in query
 
 
-def test_multiple_categories_are_grouped_so_AND_does_not_swallow_them():
+def test_multiple_categories_are_grouped_so_and_does_not_swallow_them():
     query = build_search_query(
         ArxivRequest(query="agents", categories=["cs.AI", "cs.CL"]), WINDOW
     )

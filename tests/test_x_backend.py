@@ -12,14 +12,14 @@ from net_razor.sources.x.subprocess_runner import run_json_subprocess
 
 
 def _settings(**overrides) -> Settings:
-    base = dict(auth_token="tok", ct0="ct")
+    base = {"auth_token": "tok", "ct0": "ct"}
     base.update(overrides)
     return Settings(_env_file=None, **base)
 
 
 def _tuning(**overrides) -> XSearchTuning:
     # Retry/pacing numbers are code constants now; tests drop the waits to zero.
-    base = dict(retry_backoff_seconds=0, request_spacing_seconds=0, max_attempts=3)
+    base = {"retry_backoff_seconds": 0, "request_spacing_seconds": 0, "max_attempts": 3}
     base.update(overrides)
     return XSearchTuning(**base)
 

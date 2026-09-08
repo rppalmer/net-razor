@@ -239,7 +239,7 @@ class AuditStore:
         with self._connect() as connection:
             for table in ("items", "raw", "errors"):
                 cursor = connection.execute(
-                    f"DELETE FROM {table} "
+                    f"DELETE FROM {table} "  # noqa: S608 -- table from a literal tuple
                     "WHERE call_id IN (SELECT id FROM calls WHERE created_at < ?)",
                     (before,),
                 )
@@ -251,7 +251,9 @@ class AuditStore:
     def stats(self) -> dict[str, Any]:
         with self._connect() as connection:
             counts = {
-                table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                # Suppressed below: every table name is a literal from the tuple
+                # underneath, and no caller value is interpolated -- only bound.
+                table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]  # noqa: S608
                 for table in ("calls", "items", "raw", "errors")
             }
         size = 0
@@ -263,14 +265,14 @@ class AuditStore:
 
     # -- reads ---------------------------------------------------------------
     def list_calls(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        # Top-level only: fan-out legs are reachable through their parent.
-        clause = "WHERE parent_id IS NULL"
         with self._connect() as connection:
             rows = connection.execute(
-                f"""
+                """
                 SELECT id, parent_id, tool, source, status, item_count,
                        duration_ms, created_at, finished_at
-                FROM calls {clause}
+                FROM calls
+                -- Top-level only: fan-out legs are reachable through their parent.
+                WHERE parent_id IS NULL
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
@@ -323,12 +325,14 @@ class AuditStore:
             ids = [call_id, *[child["id"] for child in children]]
             placeholders = ",".join("?" for _ in ids)
             items = connection.execute(
-                f"SELECT * FROM items WHERE call_id IN ({placeholders}) "
+                # Suppressed below: `placeholders` is a run of ? sized to `ids`.
+                # The ids themselves are bound, never interpolated.
+                f"SELECT * FROM items WHERE call_id IN ({placeholders}) "  # noqa: S608
                 "ORDER BY created_at ASC",
                 ids,
             ).fetchall()
             errors = connection.execute(
-                f"SELECT * FROM errors WHERE call_id IN ({placeholders}) "
+                f"SELECT * FROM errors WHERE call_id IN ({placeholders}) "  # noqa: S608
                 "ORDER BY created_at ASC",
                 ids,
             ).fetchall()

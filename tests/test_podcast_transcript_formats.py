@@ -1,7 +1,7 @@
 import pytest
 
 from net_razor.sources.podcast.transcript_formats import (
-    UnsupportedTranscriptFormat,
+    UnsupportedTranscriptFormatError,
     parse_transcript,
 )
 
@@ -56,7 +56,7 @@ def test_a_voice_tag_becomes_a_speaker_prefix_rather_than_being_discarded():
 
 
 def test_an_unknown_mime_type_is_refused_rather_than_guessed():
-    with pytest.raises(UnsupportedTranscriptFormat):
+    with pytest.raises(UnsupportedTranscriptFormatError):
         parse_transcript("anything", "application/pdf")
 
 

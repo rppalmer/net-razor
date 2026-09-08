@@ -293,7 +293,10 @@ def _links(entry: ET.Element) -> tuple[str, str]:
 def _normalize(
     payload: str, search_query: str
 ) -> tuple[list[EvidenceItem], dict[str, dict[str, Any]], int]:
-    root = ET.fromstring(payload)
+    # See the note in sources/podcast/feed_client.py: expat's own entity
+    # amplification limit is what makes this safe, it was measured on the pinned
+    # interpreter, and a test pins the behaviour.
+    root = ET.fromstring(payload)  # noqa: S314
     if root.tag != f"{_ATOM}feed":
         # Well-formed XML that isn't an Atom feed (an error page, say) would
         # otherwise parse cleanly and look like "no results".
