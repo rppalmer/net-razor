@@ -74,7 +74,7 @@ the working directory and passes a narrow environment, so anything resolved from
 found only when something happens to launch from the right place — and it would keep secrets in a
 directory under version control.
 
-Four things live there, none of them tracked by git:
+Three things live there, none of them tracked by git:
 
 | Path | Holds | Needed for |
 | --- | --- | --- |
@@ -88,8 +88,8 @@ cp .env.example         ~/.net-razor/.env
 cp podcasts.example.txt ~/.net-razor/podcasts.txt
 ```
 
-Then edit all three. The two lists ship fully commented out, so a fresh install starts with no
-channels and no feeds rather than someone else's. For `.env`, see
+Then edit both. The feed list ships fully commented out, so a fresh install starts with no feeds
+rather than someone else's. For `.env`, see
 [Configuration](#configuration).
 
 Copies left in the checkout are **ignored, silently** — the server starts normally and behaves as
@@ -97,10 +97,10 @@ though nothing was configured. Only the `~/.net-razor` copies are read. Settings
 startup, so **restart the server after any change.**
 
 Run `net-razor doctor` before wiring the server into a host. It prints every path it actually
-resolved, how many channels and feeds it parsed, and whether each source is configured — which is
+resolved, how many podcast feeds it parsed, and whether each source is configured — which is
 the fastest way to catch a file written to the wrong place.
 
-**Setting up a second machine** means installing as above and copying those three files across.
+**Setting up a second machine** means installing as above and copying those two files across.
 Do not copy the database: it is created on first run, and a fresh one is the correct starting
 state.
 

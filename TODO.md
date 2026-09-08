@@ -611,7 +611,7 @@ row can never be served as an episode. That scoping was written deliberately whe
 podcasts were built, anticipating this removal, and it is what made the deletion
 a deletion rather than an untangling. A test covers it.
 
-**ORIS still wires three YouTube tool names** (`net_razor_yt_new_videos`,
+**ORIS wired three YouTube tool names** (`net_razor_yt_new_videos`,
 `net_razor_yt_transcript`, `net_razor_yt_mark_processed`) in its YouTube Catch-up
-graph. That graph cannot work against this build and needs removing on their
-side.
+graph, which could not work against this build. ORIS deleted that specialist;
+confirmed 2026-09-08.

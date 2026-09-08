@@ -12,7 +12,7 @@ not find a reason to change it.
 
 ---
 
-## 1. ORIS's podcast catch-up is broken against this checkout
+## 1. ORIS's podcast catch-up is broken against this checkout — fixed in ORIS 2026-09-08
 
 This is the worst thing found, and it is not really a Net-Razor bug. It is the
 unfinished half of `docs/oris-handoff-read-state.md`, which is local-only and
@@ -37,6 +37,12 @@ built.
 **Nothing to do in Net-Razor.** The removal was correct. But whoever picks this
 up should know the consumer is broken, so it does not look like a Net-Razor
 regression later.
+
+**Correction, 2026-09-08.** ORIS has since finished its half. The tool allowlist
+no longer asks for `podcast_mark_processed`, the YouTube specialist is deleted,
+and the read-state table exists as its own SQLite store. The failure above was
+reproduced against a stale ORIS checkout. Do not build read state on ORIS's
+behalf; it is already there.
 
 ## 2. Full request URLs go to stderr, and the redaction filter does not exist
 
