@@ -175,6 +175,7 @@ personal tool and a wrong default deserves a commit, not a `.env` edit.
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PODCASTS_FILE` | Where the podcast feed list lives | `~/.net-razor/podcasts.txt` |
+| `FFMPEG_BINARY` | ffmpeg for Whisper, when the launching PATH omits it | `ffmpeg` |
 | `PODCAST_MAX_TRANSCRIPT_CHARS` | Characters of transcript per part | `12000` |
 | `PODCAST_WHISPER_ENABLED` | Turn on local transcription. Needs Apple Silicon, `ffmpeg`, and the `whisper` extra | `false` |
 | `PODCAST_WHISPER_MODEL` | Hugging Face model the transcriber loads. Downloaded on first use (~1.5 GB) | `mlx-community/whisper-large-v3-turbo` |

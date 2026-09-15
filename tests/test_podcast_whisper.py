@@ -176,3 +176,110 @@ async def test_paging_after_a_whisper_transcript_keeps_reporting_whisper(
     assert first["source_backend"] == "whisper"
     assert second["source_backend"] == "whisper"
     assert second["from_cache"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Finding ffmpeg
+# --------------------------------------------------------------------------- #
+# mlx-whisper shells out to `ffmpeg` and looks for it on PATH only. An MCP host
+# chooses the launching environment, and a launchd daemon hands down a bare
+# /usr/bin:/bin:/usr/sbin:/sbin with no Homebrew in it -- so a server whose
+# shell finds ffmpeg can still be unable to run it.
+
+
+class _CountingFeedClient:
+    """Records whether anything went upstream."""
+
+    def __init__(self) -> None:
+        self.feed_fetches = 0
+
+    async def fetch_feed(self, feed_url):
+        self.feed_fetches += 1
+        return "A Show", []
+
+
+def _whisper_fetcher(ffmpeg_binary, client=None):
+    from net_razor.sources.podcast.source import PodcastWhisperFetcher
+
+    return PodcastWhisperFetcher(
+        feed_client=client or _CountingFeedClient(),
+        enabled=True,
+        model="test-model",
+        timeout_seconds=1.0,
+        executable="/nonexistent/python",
+        ffmpeg_binary=ffmpeg_binary,
+        max_audio_bytes=1024,
+        download_timeout_seconds=1.0,
+    )
+
+
+async def _refuse_for(ffmpeg_binary, client=None):
+    from net_razor.models import PodcastTranscriptRequest
+
+    request = PodcastTranscriptRequest(episode_id="ep-1", feed_url="https://e.com/f.rss")
+    result = await _whisper_fetcher(ffmpeg_binary, client).transcript(
+        request, max_chars=1000, cached=None
+    )
+    return result
+
+
+async def test_a_missing_ffmpeg_is_a_setup_fault_not_a_missing_episode():
+    """The label a caller reads decides where they go looking.
+
+    This came back as `audio_unavailable` once, which says the episode's audio
+    is gone. It sent a real investigation at the podcast feed when the actual
+    problem was a binary missing from a daemon's PATH.
+    """
+
+    result = await _refuse_for("/nonexistent/ffmpeg")
+
+    assert [error.type for error in result.errors] == ["not_configured"]
+
+
+async def test_the_refusal_names_the_setting_that_fixes_it():
+    result = await _refuse_for("/nonexistent/ffmpeg")
+
+    assert "FFMPEG_BINARY" in result.errors[0].message
+
+
+async def test_a_missing_ffmpeg_is_caught_before_anything_is_downloaded():
+    """Whether ffmpeg exists cannot change partway through a run.
+
+    Checking late means an episode is fetched and an audio file downloaded
+    before the run fails on a fact that was knowable up front.
+    """
+
+    client = _CountingFeedClient()
+
+    await _refuse_for("/nonexistent/ffmpeg", client)
+
+    assert client.feed_fetches == 0
+
+
+def test_an_absolute_ffmpeg_path_is_accepted_as_well_as_a_bare_name(tmp_path):
+    """One setting has to cover both "it is on PATH" and "it is over there"."""
+
+    from net_razor.sources.podcast.whisper_runner import resolve_ffmpeg
+
+    binary = tmp_path / "ffmpeg"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+
+    assert resolve_ffmpeg(str(binary)) == str(binary)
+    assert resolve_ffmpeg(str(tmp_path / "absent")) is None
+
+
+def test_the_transcriber_is_given_the_configured_ffmpeg_to_find(tmp_path):
+    """mlx-whisper runs `ffmpeg` by bare name, so the directory must lead PATH.
+
+    Passing the path alone would do nothing: the only lever on a bare-name
+    lookup is the PATH the subprocess is started with.
+    """
+
+    import os
+
+    from net_razor.sources.podcast.whisper_runner import _worker_environment
+
+    environment = _worker_environment(str(tmp_path / "bin" / "ffmpeg"))
+
+    assert environment["PATH"].split(os.pathsep)[0] == str(tmp_path / "bin")

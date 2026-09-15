@@ -47,6 +47,7 @@ def test_doctor_describes_the_podcast_source_alongside_the_others(make_app, tmp_
         "configured_feed_count": 2,
         "whisper_enabled": False,
         "whisper_model": "mlx-community/whisper-large-v3-turbo",
+        "ffmpeg_binary": "ffmpeg",
         "ffmpeg_available": sources["podcast"]["ffmpeg_available"],
     }
 

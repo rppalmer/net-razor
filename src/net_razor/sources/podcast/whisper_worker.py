@@ -50,7 +50,15 @@ def main() -> int:
             request["audio_path"], path_or_hf_repo=request["model"], verbose=None
         )
     except FileNotFoundError as exc:
-        # ffmpeg missing from PATH, or the audio file vanished.
+        # Two different failures land here, and calling both "audio_unavailable"
+        # blamed the episode for a problem with the machine. A missing ffmpeg is
+        # a setup fault; a missing file is not.
+        if "ffmpeg" in str(exc):
+            return _fail(
+                "not_configured",
+                f"ffmpeg could not be run: {exc}. Set FFMPEG_BINARY to its "
+                "absolute path if the launching PATH does not include it.",
+            )
         return _fail("audio_unavailable", f"audio could not be read: {exc}")
     except Exception as exc:  # a model download failure, an out-of-memory, a corrupt file
         return _fail("transcription_failed", f"{type(exc).__name__}: {exc}")

@@ -22,7 +22,9 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
     storage_check = _check_storage(database_path, database_parent)
     x_node_path = shutil.which(settings.node_binary)
     podcast_feeds = load_feed_urls(settings.podcasts_file)
-    ffmpeg_path = shutil.which("ffmpeg")
+    # The configured binary, not a bare "ffmpeg": doctor is asked whether
+    # transcription will work, and it works with whatever the server will run.
+    ffmpeg_path = shutil.which(settings.ffmpeg_binary)
     checks = [
         storage_check,
         {
@@ -48,8 +50,12 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
                 else (
                     f"Local transcription is on, using {settings.podcast_whisper_model}."
                     if ffmpeg_path
-                    else "Local transcription is on but ffmpeg is not on PATH; "
-                    "transcription will fail until it is installed."
+                    else (
+                        "Local transcription is on but ffmpeg was not found as "
+                        f"{settings.ffmpeg_binary!r}. Install it, or set "
+                        "FFMPEG_BINARY to its absolute path; an MCP host can "
+                        "launch this server with a PATH that omits it."
+                    )
                 )
             ),
         },
@@ -115,6 +121,7 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
                 "configured_feed_count": len(podcast_feeds),
                 "whisper_enabled": settings.podcast_whisper_enabled,
                 "whisper_model": settings.podcast_whisper_model,
+                "ffmpeg_binary": settings.ffmpeg_binary,
                 "ffmpeg_available": ffmpeg_path is not None,
             },
         },

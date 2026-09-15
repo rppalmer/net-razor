@@ -33,7 +33,11 @@ from net_razor.sources.podcast.transcript_formats import (
     UnsupportedTranscriptFormatError,
     parse_transcript,
 )
-from net_razor.sources.podcast.whisper_runner import WhisperError, run_whisper
+from net_razor.sources.podcast.whisper_runner import (
+    WhisperError,
+    resolve_ffmpeg,
+    run_whisper,
+)
 
 # A transcript fetch carries no publish date of its own. A fixed sentinel keeps
 # the item deterministic, where the wall clock would not.
@@ -486,6 +490,7 @@ class PodcastWhisperFetcher:
         model: str,
         timeout_seconds: float,
         executable: str,
+        ffmpeg_binary: str,
         max_audio_bytes: int,
         download_timeout_seconds: float,
     ) -> None:
@@ -494,6 +499,7 @@ class PodcastWhisperFetcher:
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._executable = executable
+        self._ffmpeg_binary = ffmpeg_binary
         self._max_audio_bytes = max_audio_bytes
         self._download_timeout_seconds = download_timeout_seconds
 
@@ -536,6 +542,25 @@ class PodcastWhisperFetcher:
                 backend="whisper",
             )
 
+        # Checked here rather than left to the transcriber, for two reasons. It
+        # is a fact about this machine, so it cannot become true partway through
+        # a run; and finding out afterwards means an episode was downloaded for
+        # nothing. A host that launches this server chooses its PATH, and a
+        # launchd daemon's is bare, so "ffmpeg is on PATH" is not a safe
+        # assumption even when a shell on the same machine finds it.
+        ffmpeg = resolve_ffmpeg(self._ffmpeg_binary)
+        if ffmpeg is None:
+            return _transcript_error(
+                effective,
+                request,
+                "not_configured",
+                f"ffmpeg was not found as {self._ffmpeg_binary!r}, and Whisper "
+                "cannot read audio without it. Install ffmpeg, or set "
+                "FFMPEG_BINARY to its absolute path if the launching PATH does "
+                "not include it.",
+                backend="whisper",
+            )
+
         try:
             episode = await self._episode(request)
         except PodcastFeedError as exc:
@@ -573,6 +598,7 @@ class PodcastWhisperFetcher:
                     model=self._model,
                     timeout_seconds=self._timeout_seconds,
                     executable=self._executable,
+                    ffmpeg=ffmpeg,
                 )
             except WhisperError as exc:
                 return _transcript_error(

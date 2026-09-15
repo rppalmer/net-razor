@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # in the server notices.
     podcast_whisper_enabled: bool = False
     podcast_whisper_model: str = "mlx-community/whisper-large-v3-turbo"
+    # mlx-whisper shells out to `ffmpeg` and finds it on PATH only. An MCP host
+    # picks the environment, and a launchd daemon hands down a bare
+    # /usr/bin:/bin:/usr/sbin:/sbin -- which does not include Homebrew, where
+    # ffmpeg lives on macOS. Set an absolute path here and it is found whatever
+    # the launching PATH holds. Exactly why `node_binary` exists, same host,
+    # same failure.
+    ffmpeg_binary: str = "ffmpeg"
     # The longest configured show is 184 minutes, which measures at 8.3 minutes of
     # transcription. This is the ceiling before the subprocess is killed, sized so
     # the consumer's own timeout never fires first.

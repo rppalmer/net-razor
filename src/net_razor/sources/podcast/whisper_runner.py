@@ -11,11 +11,39 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 from pathlib import Path
 
 from net_razor.models import TranscriptSegment
 
 _MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+
+
+def resolve_ffmpeg(binary: str) -> str | None:
+    """Where ``ffmpeg`` actually is, or None when it cannot be found.
+
+    Takes a bare name or an absolute path: ``shutil.which`` searches PATH for
+    the first and checks executability for the second, so one setting covers
+    both "it is on PATH" and "it is over there".
+    """
+
+    return shutil.which(binary)
+
+
+def _worker_environment(ffmpeg: str) -> dict[str, str]:
+    """The parent environment, with ffmpeg's directory ahead of PATH.
+
+    mlx-whisper runs ``ffmpeg`` by bare name, so the only way to point it at a
+    particular binary is to put that binary's directory first. Prepended rather
+    than appended so a configured path wins over whatever else is named ffmpeg.
+    """
+
+    environment = os.environ.copy()
+    directory = str(Path(ffmpeg).parent)
+    existing = environment.get("PATH", "")
+    environment["PATH"] = f"{directory}{os.pathsep}{existing}" if existing else directory
+    return environment
 
 
 class WhisperError(Exception):
@@ -70,8 +98,13 @@ async def run_whisper(
     model: str,
     timeout_seconds: float,
     executable: str,
+    ffmpeg: str,
 ) -> tuple[list[TranscriptSegment], str | None]:
-    """Transcribe ``audio_path`` in a subprocess that exits when finished."""
+    """Transcribe ``audio_path`` in a subprocess that exits when finished.
+
+    ``ffmpeg`` is the resolved absolute path, checked by the caller before any
+    audio was downloaded. Its directory goes on the subprocess PATH.
+    """
     try:
         process = await asyncio.create_subprocess_exec(
             executable,
@@ -80,6 +113,7 @@ async def run_whisper(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_worker_environment(ffmpeg),
         )
     except OSError as exc:
         raise WhisperError(

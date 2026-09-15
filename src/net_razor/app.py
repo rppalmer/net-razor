@@ -451,6 +451,7 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
         timeout_seconds=resolved.podcast_whisper_timeout_seconds,
         # This interpreter: the worker lives in this package and needs its imports.
         executable=sys.executable,
+        ffmpeg_binary=resolved.ffmpeg_binary,
         max_audio_bytes=resolved.podcast_max_audio_bytes,
         download_timeout_seconds=resolved.podcast_audio_timeout_seconds,
     )
