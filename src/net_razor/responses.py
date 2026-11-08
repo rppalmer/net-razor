@@ -66,6 +66,15 @@ class ArxivSearchResponse(SearchResponse):
     total_matching: int
 
 
+class GitHubSearchResponse(SearchResponse):
+    # How many issues matched upstream, before max_results trimmed the list.
+    total_matching: int
+    # GitHub sets this when its own search timed out and the results are a
+    # partial answer. Declared because without it a truncated search is
+    # indistinguishable from one that genuinely found little.
+    incomplete_results: bool
+
+
 class PodcastNewEpisodesResponse(SearchResponse):
     # How many feeds were read for this call, which is not the number
     # configured when the caller narrowed to specific feeds.
@@ -143,11 +152,25 @@ class ResearchSourceSummary(_Response):
     errors: list[ServiceErrorItem]
 
 
+class GitHubResearchSourceSummary(ResearchSourceSummary):
+    """The summary of a GitHub search that reached GitHub and got an answer.
+
+    A separate model so the other sources' entries keep exactly the keys they
+    have always had. A failed GitHub search uses the plain summary: it does not
+    know how many issues match, and reporting zero would say that it did.
+    """
+
+    # How many issues matched upstream, before the per-source limit trimmed the list.
+    total_matching: int
+    # GitHub sets this when its own search timed out and the results are partial.
+    incomplete_results: bool
+
+
 class ResearchResponse(_Response):
     call_id: str
     topic: str
     requested_days: int
-    sources: dict[SourceName, ResearchSourceSummary]
+    sources: dict[SourceName, GitHubResearchSourceSummary | ResearchSourceSummary]
     # Grouped by source and never merged or ranked. Every item repeats its own
     # source, so an item's origin does not depend on which list it is in.
     results: dict[SourceName, list[EvidenceItem]]

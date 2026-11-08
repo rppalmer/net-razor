@@ -175,6 +175,28 @@ async def test_a_failed_research_leg_matches_the_schema(make_app):
 
 
 @pytest.mark.asyncio
+async def test_a_research_response_with_github_matches_its_schema(make_app):
+    app = make_app(
+        github=RecordingSource(
+            "github", _result("github", total_matching=812, incomplete_results=True)
+        ),
+        hn=RecordingSource("hn", _result("hn")),
+    )
+    response = await app.research(ResearchRequest(topic="agents", sources=["hn", "github"]))
+    assert response["sources"]["github"]["incomplete_results"] is True
+    _round_trips(ResearchResponse, response)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_github_leg_matches_its_schema(make_app):
+    response = await make_app().research(
+        ResearchRequest(topic="created:>2026-01-01 agents", sources=["github", "hn"])
+    )
+    assert response["sources"]["github"]["errors"], "expected the topic to be refused"
+    _round_trips(ResearchResponse, response)
+
+
+@pytest.mark.asyncio
 async def test_every_error_reports_whether_it_is_worth_retrying(make_app):
     """Including a fan-out leg that failed, which used to build a bare dict.
 
@@ -195,3 +217,33 @@ async def test_runs_response_matches_its_schema(make_app):
     app = make_app(hn=RecordingSource("hn", _result("hn")))
     await app.hn_search(HNRequest(query="agents"))
     _round_trips(RunsResponse, app.runs(limit=10))
+
+
+@pytest.mark.asyncio
+async def test_github_search_response_matches_its_schema(make_app):
+    from net_razor.models import GitHubRequest
+    from net_razor.responses import GitHubSearchResponse
+
+    app = make_app(
+        github=RecordingSource(
+            "github", _result("github", total_matching=812, incomplete_results=True)
+        )
+    )
+    _round_trips(GitHubSearchResponse, await app.github_search(GitHubRequest(query="agents")))
+
+
+@pytest.mark.asyncio
+async def test_an_incomplete_github_search_survives_the_declared_schema(make_app):
+    """The flag is the whole point of declaring it -- a model that dropped it
+    would leave a partial search looking like a complete one."""
+    from net_razor.models import GitHubRequest
+    from net_razor.responses import GitHubSearchResponse
+
+    app = make_app(
+        github=RecordingSource(
+            "github", _result("github", total_matching=812, incomplete_results=True)
+        )
+    )
+    response = await app.github_search(GitHubRequest(query="agents"))
+
+    assert GitHubSearchResponse.model_validate(response).incomplete_results is True

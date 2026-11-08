@@ -35,3 +35,26 @@ def test_the_checkout_is_still_used_for_code() -> None:
     settings = Settings(_env_file=None)
 
     assert (settings.repo_root / "pyproject.toml").exists()
+
+
+def test_a_github_token_is_held_as_a_secret_and_read_through_an_accessor() -> None:
+    """Same treatment as the X cookies: a SecretStr, so the token cannot land in
+    a repr, a log line or an audited request by accident."""
+    from pydantic import SecretStr
+
+    from net_razor.config import Settings
+
+    settings = Settings(_env_file=None, github_token="ghp_secret")
+
+    assert isinstance(settings.github_token, SecretStr)
+    assert "ghp_secret" not in repr(settings)
+    assert settings.github_token_value == "ghp_secret"
+
+
+def test_a_blank_github_token_reads_as_absent() -> None:
+    """An empty variable in .env is how a token gets "unset" in practice, and
+    sending an empty Bearer header would fail every request with a 401."""
+    from net_razor.config import Settings
+
+    assert Settings(_env_file=None, github_token="   ").github_token_value is None
+    assert Settings(_env_file=None).github_token_value is None

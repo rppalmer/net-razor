@@ -113,6 +113,13 @@ def build_doctor_report(*, settings: Settings, store: AuditStore) -> dict[str, A
             "hn": {"configured": True},
             # No key, no account, no settings -- nothing to misconfigure.
             "arxiv": {"configured": True},
+            "github": {
+                # Always usable. A token is a rate limit, not a requirement:
+                # 10 searches a minute without one, 30 with.
+                "configured": True,
+                "token_configured": bool(settings.github_token_value),
+                "rate_limit_per_minute": 30 if settings.github_token_value else 10,
+            },
             "podcast": {
                 # A feed list is the whole configuration. Without one there is
                 # nothing to discover, which is why this mirrors the check above.

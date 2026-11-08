@@ -6,7 +6,15 @@ from typing import Any
 
 import pytest
 
-from net_razor.app import App, SourceEntry, _arxiv_leg, _hn_leg, _podcast_leg, _x_leg
+from net_razor.app import (
+    App,
+    SourceEntry,
+    _arxiv_leg,
+    _github_leg,
+    _hn_leg,
+    _podcast_leg,
+    _x_leg,
+)
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import FixedClock, ResolvedWindow
@@ -48,7 +56,7 @@ def make_app(store, clock):
     """Factory building an App wired with fake sources."""
 
     def _make(
-        *, x=None, hn=None, arxiv=None, podcast=None,
+        *, x=None, hn=None, arxiv=None, github=None, podcast=None,
         podcast_transcript=None, podcast_whisper=None, settings=None,
     ) -> App:
         return App(
@@ -68,6 +76,10 @@ def make_app(store, clock):
                 "arxiv": SourceEntry(
                     source=arxiv or RecordingSource("arxiv", FetchResult.empty({})),
                     label="arXiv", build_request=_arxiv_leg,
+                ),
+                "github": SourceEntry(
+                    source=github or RecordingSource("github", FetchResult.empty({})),
+                    label="GitHub", build_request=_github_leg,
                 ),
                 "podcast": SourceEntry(
                     source=podcast or RecordingSource("podcast", FetchResult.empty({})),

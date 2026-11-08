@@ -18,7 +18,7 @@ that share one core:
           │                            │
           ▼                            ▼
     mcp/server.py                  cli/main.py          protocol adapters —
-    11 @tool wrappers              6 operational cmds    no logic lives here
+    12 @tool wrappers              6 operational cmds    no logic lives here
           │                            │
           └─────────────┬──────────────┘
                         ▼
@@ -57,6 +57,7 @@ inject a fake transport instead of hitting the network.
 | --- | --- | --- | --- | --- |
 | HN | `sources/hn.py` · `HNSource` | `HttpHNClient` | Algolia HN API | none |
 | arXiv | `sources/arxiv.py` · `ArxivSource` | `HttpArxivClient` | arXiv Atom API | none |
+| GitHub | `sources/github.py` · `GitHubSource` | `HttpGitHubClient` | GitHub issue search API | optional token |
 | Podcast | `sources/podcast/source.py` · `PodcastSource` | `PodcastFeedClient` | publisher RSS feeds | none |
 | Podcast transcript | `sources/podcast/source.py` · `PodcastTranscriptFetcher` | `PodcastFeedClient` | publisher transcript files | none |
 | Podcast Whisper | `sources/podcast/source.py` · `PodcastWhisperFetcher` | `run_whisper` → Python subprocess | local model, no upstream | none |
@@ -194,6 +195,18 @@ search over episodes, and matching a topic against episode titles would be a
 scoring judgement — so `ResearchRequest` rejects `podcast` outright rather than
 guessing.
 
+GitHub can join a `research` fan-out, but only when a caller names it. It stays
+out of the default because callers that leave `sources` out must keep getting the
+same answers, and because issue search across the whole of GitHub is noisy on a
+bare topic. The leg builds the same `GitHubRequest` that `github_search` builds
+from its defaults, so both tools run the same search.
+
+A topic can be valid for one source and refused by another. `GitHubRequest`
+refuses `created:`, `is:` and `type:` qualifiers, and X and Hacker News do not.
+`research` builds each leg's request before the fan-out starts, so it catches that
+refusal and reports it as a failed leg with no `call_id`. No source was reached,
+so there is no child call to audit. The parent call still records the error.
+
 ## Audit store
 
 SQLite, WAL mode, five tables.
@@ -291,7 +304,7 @@ because there is almost nothing in it to test.
 
 ## Configuration
 
-Fourteen environment variables in `~/.net-razor/.env`, plus
+Sixteen environment variables in `~/.net-razor/.env`, plus
 `~/.net-razor/podcasts.txt` for the podcast
 feed list. Two rules shaped that split:
 

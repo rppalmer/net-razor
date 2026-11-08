@@ -9,6 +9,7 @@ from net_razor.models import (
     ArxivRequest,
     EvidenceAuthor,
     EvidenceItem,
+    GitHubRequest,
     HNRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
@@ -19,6 +20,7 @@ from net_razor.models import (
 
 REQUEST_MODELS = [
     ArxivRequest,
+    GitHubRequest,
     HNRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
@@ -121,3 +123,51 @@ def test_an_unknown_argument_names_itself_in_the_rejection():
 
     with pytest.raises(ValidationError, match="provider"):
         HNRequest(query="agents", provider="reddit")
+
+
+# --------------------------------------------------------------------------- #
+# GitHub issue search
+# --------------------------------------------------------------------------- #
+def test_github_request_defaults():
+    """Seven days, because issue traffic on one topic is thin and a single day
+    usually returns nothing. Issues rather than pull requests, because the
+    question this tool answers is what people are reporting and discussing."""
+    request = GitHubRequest(query="mcp auth")
+    assert request.days == 7
+    assert request.type == "issue"
+    assert request.sort == "created"
+    assert request.max_results == 25
+
+
+@pytest.mark.parametrize("query", ["created:>2026-01-01 agents", "agents created:<2026-01-01"])
+def test_github_request_rejects_a_created_qualifier_in_the_query(query):
+    """The resolved window is always appended as ``created:``, so a second one
+    in the query silently ANDs against it and narrows a search the caller
+    believes is bounded only by ``days``. Same trap XRequest already guards for
+    ``since:`` and ``until:``."""
+    with pytest.raises(ValidationError, match="created:"):
+        GitHubRequest(query=query)
+
+
+@pytest.mark.parametrize("query", ["is:pr agents", "agents type:issue", "IS:PR agents"])
+def test_github_request_rejects_a_type_qualifier_in_the_query(query):
+    """``type`` is a parameter, so a qualifier in the query can contradict it and
+    return nothing at all -- type="issue" with "is:pr" matches no result."""
+    with pytest.raises(ValidationError, match="type"):
+        GitHubRequest(query=query)
+
+
+def test_github_request_allows_other_github_qualifiers():
+    """Everything GitHub's own syntax offers stays available; only the two the
+    tool's own parameters already control are refused."""
+    request = GitHubRequest(query='repo:anthropics/mcp label:bug "auth token"')
+    assert request.query == 'repo:anthropics/mcp label:bug "auth token"'
+
+
+def test_research_accepts_github_when_named():
+    request = ResearchRequest(topic="agents", sources=["hn", "github"])
+    assert request.sources == ["hn", "github"]
+
+
+def test_github_is_not_a_default_research_source():
+    assert "github" not in ResearchRequest(topic="agents").sources

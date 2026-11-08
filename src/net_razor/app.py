@@ -7,6 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
+
 from net_razor.audit.recorder import AuditRecorder
 from net_razor.audit.store import AuditStore
 from net_razor.clock import Clock, ResolvedWindow, SystemClock, resolve_window
@@ -15,6 +17,7 @@ from net_razor.diagnostics import build_doctor_report
 from net_razor.logging import configure_json_logging, prune_log_file
 from net_razor.models import (
     ArxivRequest,
+    GitHubRequest,
     HNRequest,
     PodcastNewEpisodesRequest,
     PodcastTranscriptRequest,
@@ -26,6 +29,7 @@ from net_razor.models import (
 )
 from net_razor.sources.arxiv import ArxivSource, HttpArxivClient
 from net_razor.sources.base import Source
+from net_razor.sources.github import GitHubSource, HttpGitHubClient
 from net_razor.sources.hn import HNSource, HttpHNClient
 from net_razor.sources.podcast.feed_client import PodcastFeedClient
 from net_razor.sources.podcast.feeds import load_feed_urls
@@ -58,6 +62,13 @@ def _leg_error(what: str, exc: BaseException) -> dict[str, Any]:
             type="timeout",
             message=f"{what} exceeded the {_LEG_DEADLINE_SECONDS:.0f}s leg deadline",
             details={"deadline_seconds": _LEG_DEADLINE_SECONDS},
+        )
+    elif isinstance(exc, ValidationError):
+        # Not retriable: the same topic will be refused the same way.
+        error = ServiceErrorItem(
+            type="invalid_query",
+            message=f"{what} did not run because this source refused the topic",
+            details={"reason": "; ".join(item["msg"] for item in exc.errors())},
         )
     else:
         error = ServiceErrorItem(
@@ -119,6 +130,15 @@ def _hn_leg(request: ResearchRequest) -> HNRequest:
 
 
 
+def _github_leg(request: ResearchRequest) -> GitHubRequest:
+    # `type` and `sort` are left to GitHubRequest's defaults, the same ones
+    # net_razor_github_search uses, so the two tools run the same search.
+    return GitHubRequest(
+        query=request.topic, max_results=request.max_results_per_source,
+        days=request.days,
+    )
+
+
 def _podcast_leg(request: ResearchRequest) -> PodcastNewEpisodesRequest:
     """Exists only to satisfy the registry's shape.
 
@@ -161,6 +181,9 @@ class App:
 
     async def arxiv_search(self, request: ArxivRequest) -> dict[str, Any]:
         return await self._search_tool("arxiv_search", self.sources["arxiv"].source, request)
+
+    async def github_search(self, request: GitHubRequest) -> dict[str, Any]:
+        return await self._search_tool("github_search", self.sources["github"].source, request)
 
     def _stored_podcast_transcript(
         self, request: PodcastTranscriptRequest
@@ -276,30 +299,43 @@ class App:
             # finds nothing over a weekend, while X moves in hours. Forcing one
             # width on all of them silently emptied the slowest source.
             now = self.clock.now()
-            legs = []
+            subs: dict[SourceName, Any] = {}
+            windows: dict[SourceName, ResolvedWindow] = {}
+            outcomes: dict[SourceName, Any] = {}
             for name in request.sources:
-                sub = self.sources[name].build_request(request)
-                legs.append(
-                    (name, sub, resolve_window(days=sub.days, since=None, until=None, now=now))
-                )
+                try:
+                    subs[name] = self.sources[name].build_request(request)
+                except ValidationError as exc:
+                    # A topic can be fine for one source and refused by another:
+                    # GitHub rejects `created:` and `is:` qualifiers. That is one
+                    # failed leg, and it must not cost the caller the other legs.
+                    outcomes[name] = exc
+                    days = request.days
+                else:
+                    days = subs[name].days
+                windows[name] = resolve_window(days=days, since=None, until=None, now=now)
+
             results = await asyncio.gather(
                 *(
                     asyncio.wait_for(
                         self._search_tool(
                             f"{name}_search", self.sources[name].source, sub,
-                            parent_id=call.id, window=leg_window,
+                            parent_id=call.id, window=windows[name],
                         ),
                         timeout=_LEG_DEADLINE_SECONDS,
                     )
-                    for name, sub, leg_window in legs
+                    for name, sub in subs.items()
                 ),
                 return_exceptions=True,
             )
+            outcomes.update(zip(subs, results, strict=True))
 
             sources_summary: dict[str, Any] = {}
             grouped: dict[str, list[dict[str, Any]]] = {}
             caveats: list[str] = []
-            for (name, _sub, leg_window), result in zip(legs, results, strict=True):
+            for name in request.sources:
+                result = outcomes[name]
+                leg_window = windows[name]
                 if isinstance(result, BaseException):
                     sources_summary[name] = {
                         "queried": True, "items_found": 0, "call_id": None,
@@ -317,6 +353,12 @@ class App:
                         "window": leg_window.as_dict(),
                         "errors": result["errors"],
                     }
+                    # Only GitHub sets `incomplete_results`, and only when its
+                    # search succeeded. arXiv also has `total_matching`, but
+                    # adding it would change what default callers receive.
+                    if "incomplete_results" in result:
+                        sources_summary[name]["total_matching"] = result["total_matching"]
+                        sources_summary[name]["incomplete_results"] = result["incomplete_results"]
                     grouped[name] = result["items"]
                 if sources_summary[name]["errors"]:
                     caveats.append(
@@ -435,6 +477,11 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
     )
 
     arxiv_source = ArxivSource(HttpArxivClient(resolved.request_timeout_seconds))
+    github_source = GitHubSource(
+        HttpGitHubClient(
+            resolved.request_timeout_seconds, token=resolved.github_token_value
+        )
+    )
 
     podcast_feed_client = PodcastFeedClient(
         timeout_seconds=resolved.request_timeout_seconds
@@ -468,6 +515,9 @@ def create_app(*, settings: Settings | None = None, clock: Clock | None = None) 
             "hn": SourceEntry(source=hn_source, label="HN", build_request=_hn_leg),
             "arxiv": SourceEntry(
                 source=arxiv_source, label="arXiv", build_request=_arxiv_leg
+            ),
+            "github": SourceEntry(
+                source=github_source, label="GitHub", build_request=_github_leg
             ),
             "podcast": SourceEntry(
                 source=podcast_source, label="Podcasts", build_request=_podcast_leg

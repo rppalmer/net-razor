@@ -14,18 +14,27 @@ from pydantic import (
     model_validator,
 )
 
-SourceName = Literal["x", "hn", "arxiv", "podcast"]
+SourceName = Literal["x", "hn", "arxiv", "github", "podcast"]
 
 # What a research call fans out to when the caller names no sources. Defined once
 # so the model and the MCP tool cannot drift apart.
 #
 # arXiv was absent while it returned nothing for every multi-word topic -- the
 # phrase-quoting bug, not a judgement about the source. Podcasts are excluded by
-# construction: they have no keyword search.
+# construction: they have no keyword search. GitHub runs only when a caller names
+# it: callers that leave `sources` out must keep getting the same answers.
 DEFAULT_RESEARCH_SOURCES: tuple[SourceName, ...] = ("x", "hn", "arxiv")
+
+# What a research call can fan out to. It is the type on the MCP tool's argument,
+# so the schema a model reads lists only the sources the server will run.
+ResearchSourceName = Literal["x", "hn", "arxiv", "github"]
 
 _SINCE_OPERATOR = re.compile(r"(?i)(?<![\w-])since\s*:")
 _UNTIL_OPERATOR = re.compile(r"(?i)(?<![\w-])until\s*:")
+# GitHub qualifiers that a request parameter already controls. Both are
+# always applied by the source, so a second one in the query fights it.
+_CREATED_QUALIFIER = re.compile(r"(?i)(?<![\w-])created\s*:")
+_TYPE_QUALIFIER = re.compile(r"(?i)(?<![\w-])(is|type)\s*:")
 # An arXiv subject class: an archive, optionally a dotted subclass. "cs.AI", "math.AT", "econ".
 _ARXIV_CATEGORY = re.compile(r"^[a-z][a-z-]*(\.[A-Za-z]{2,})?$")
 
@@ -217,6 +226,61 @@ class ArxivRequest(_TextQuery):
 
     @model_validator(mode="after")
     def _validate_dates(self) -> ArxivRequest:
+        if self.since and self.until and self.until <= self.since:
+            raise ValueError("until must be after since")
+        return self
+
+
+class GitHubRequest(_TextQuery):
+    """Search GitHub issues and pull requests.
+
+    ``days`` defaults to 7 rather than 1 because issue traffic on any one topic
+    is thin -- a single day across all of GitHub usually returns nothing.
+
+    GitHub's own query syntax is passed through, so ``repo:``, ``org:``,
+    ``label:``, ``state:`` and quoted phrases all work inside ``query``. Note
+    that since GitHub retired legacy issue search (2025-09-04) a space between
+    two ``repo:``/``org:`` qualifiers means AND, where it used to mean OR.
+    """
+
+    query: str
+    max_results: int = Field(default=25, ge=1, le=50)
+    days: int = Field(default=7, ge=1, le=3650)
+    since: date | None = None
+    until: date | None = None
+    type: Literal["issue", "pr", "both"] = "issue"
+    # "relevance" is GitHub's best-match ordering, which it applies when the
+    # request names no sort field at all.
+    sort: Literal["created", "updated", "comments", "relevance"] = "created"
+
+    @field_validator("query")
+    @classmethod
+    def _reject_qualifiers_a_parameter_already_controls(cls, value: str) -> str:
+        """On the field, not the model, so the rejection names ``query``.
+
+        A model-level check reports the whole request as the offending input,
+        which buries the one argument the caller has to change -- and the
+        caller here is usually a model correcting itself.
+        """
+        # The resolved window is always appended as a `created:` qualifier, so a
+        # second one ANDs against it and quietly narrows a search the caller
+        # believes is bounded only by days/since/until.
+        if _CREATED_QUALIFIER.search(value):
+            raise ValueError(
+                "query must not contain a created: qualifier; the time window is "
+                "set by days, since and until"
+            )
+        # `type` is a parameter, and a contradicting qualifier ("is:pr" with
+        # type="issue") matches nothing at all rather than failing visibly.
+        if _TYPE_QUALIFIER.search(value):
+            raise ValueError(
+                "query must not contain an is: or type: qualifier; use the type "
+                "parameter instead"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> GitHubRequest:
         if self.since and self.until and self.until <= self.since:
             raise ValueError("until must be after since")
         return self

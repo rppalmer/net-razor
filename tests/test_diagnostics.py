@@ -40,7 +40,7 @@ def test_doctor_describes_the_podcast_source_alongside_the_others(make_app, tmp_
 
     sources = app.doctor()["sources"]
 
-    assert set(sources) == {"x", "hn", "arxiv", "podcast"}
+    assert set(sources) == {"x", "hn", "arxiv", "github", "podcast"}
     assert sources["podcast"] == {
         "configured": True,
         "feeds_file": str(feeds),
@@ -57,3 +57,25 @@ def test_doctor_reports_the_podcast_source_unconfigured_without_feeds(make_app):
 
     assert sources["podcast"]["configured"] is False
     assert sources["podcast"]["configured_feed_count"] == 0
+
+
+def test_doctor_says_whether_a_github_token_is_configured_without_printing_it(make_app):
+    """The point of the check is that unauthenticated search still works, just
+    at a tenth of the rate limit -- so this is a hint, not an error."""
+    from tests.conftest import stub_settings
+
+    app = make_app(settings=stub_settings(github_token="ghp_secret"))
+
+    report = app.doctor()
+
+    assert report["sources"]["github"]["token_configured"] is True
+    assert "ghp_secret" not in str(report)
+
+
+def test_doctor_reports_github_usable_without_a_token(make_app):
+    app = make_app()
+
+    github = app.doctor()["sources"]["github"]
+
+    assert github["token_configured"] is False
+    assert github["configured"] is True

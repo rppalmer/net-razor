@@ -1,7 +1,7 @@
 # Net-Razor
 
-Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, podcasts, and arXiv
-for an
+Net-Razor is a local, MCP-first tool that fetches data from X, Hacker News, podcasts, arXiv and
+GitHub for an
 LLM in a **deterministic, fully audited** way. Any MCP host can drive it — an IDE extension,
 Claude Code, an agent framework — and the audit trail is the same regardless of which one did.
 
@@ -148,7 +148,7 @@ to its feed once, when you add it.
 
 ### Every setting
 
-Twenty-one variables, all optional unless marked **required**. A relative path resolves against
+Sixteen variables, all optional unless marked **required**. A relative path resolves against
 `~/.net-razor`, not the checkout. Retry, backoff and request-pacing numbers are deliberately
 *not* configurable — they are constants in the code, because nobody tunes retry backoff on a
 personal tool and a wrong default deserves a commit, not a `.env` edit.
@@ -169,6 +169,12 @@ personal tool and a wrong default deserves a commit, not a `.env` edit.
 | `AUTH_TOKEN` | **Required.** `auth_token` cookie from a logged-in x.com session | *unset* |
 | `CT0` | **Required.** `ct0` cookie from the same session | *unset* |
 | `NODE_BINARY` | Path to Node (X search runs a bundled Node backend). Use an **absolute** path if your MCP host launches with a sparse `PATH` | `node` |
+
+**GitHub** — optional; issue search works without it.
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | Personal access token, no scopes needed. Raises the search rate limit from 10 requests a minute to 30 | *unset* |
 
 **Podcasts** — the last five matter only when local transcription is on.
 
@@ -315,6 +321,48 @@ Two things that differ from the other sources, and are deliberate:
 The time window is applied by arXiv itself via `submittedDate`, not filtered locally, so
 `effective_request.search_query` shows exactly what was asked upstream.
 
+## GitHub
+
+`net_razor_github_search` searches GitHub issues and pull requests. It answers what people are
+reporting, hitting and arguing about — bug reports, feature requests, and the discussion around a
+release — which is a different question from what a repository *is*.
+
+**No token needed.** Search works unauthenticated at 10 requests a minute. A `GITHUB_TOKEN` with
+no scopes raises that to 30 and changes nothing else. The token travels as a request header, never
+in a URL, so it cannot end up in a log line.
+
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `query` | Plain text, plus GitHub's own qualifiers — `repo:owner/name`, `org:`, `label:`, `state:` | *required* |
+| `type` | `issue`, `pr`, or `both` | `issue` |
+| `days` | Lookback window | `7` |
+| `max_results` | Results to return (1–50) | `25` |
+| `sort` | `created`, `updated`, `comments`, or `relevance` | `created` |
+
+**Narrow it.** A bare topic searched across all of GitHub is mostly noise. The qualifiers are
+where the value is: `repo:modelcontextprotocol/servers oauth` finds something; `oauth` alone does
+not.
+
+Two qualifiers are refused rather than accepted:
+
+- **`created:`** — the time window is always applied as a `created:` qualifier built from `days`,
+  `since` and `until`. A second one would AND against it and silently narrow a search the caller
+  believes is bounded only by `days`.
+- **`is:` and `type:`** — `type` is a parameter. A qualifier that contradicts it (`is:pr` with
+  `type="issue"`) matches nothing at all, which looks like an empty result rather than a mistake.
+
+**Check `incomplete_results`.** GitHub sets it when its own search timed out, meaning the results
+are a partial answer. Without reading it you cannot tell a truncated search from a small one.
+`total_matching` reports how many matched upstream before `max_results` trimmed the list.
+
+Long issue bodies are shortened and the item says so with `truncated`. The complete body still
+goes to the audit store, so nothing is lost — the cap exists so one pasted stack trace cannot
+crowd out the other results.
+
+**Also available through `research`, when named.** `net_razor_research` runs this same search if
+its `sources` includes `github`. It is never part of the default. Call this tool directly when you
+want a different `type` or `sort`, or a `repo:` or `label:` qualifier that applies to GitHub alone.
+
 ## MCP
 
 Any MCP host launches the server over stdio. The two things every host needs are the
@@ -357,19 +405,26 @@ Available MCP tools:
 - `net_razor_x_search`
 - `net_razor_hn_search`
 - `net_razor_arxiv_search`
+- `net_razor_github_search`
 - `net_razor_podcast_feeds`
 - `net_razor_podcast_new_episodes`
 - `net_razor_podcast_transcript`
 - `net_razor_podcast_whisper_transcript`
 
 `net_razor_research` fans out to `x`, `hn` and `arxiv` by default, and returns results **grouped
-by source** — `results` is keyed by source name, and every item repeats its own `source`. Each
-source also gets the window its own cadence needs from one clock reading: arXiv widens to at least
-a week because it announces on weekdays only, while X and Hacker News use the days you asked for.
-Every leg's resolved window is reported back under `sources`.
+by source** — `results` is keyed by source name, and every item repeats its own `source`. `github`
+runs only when `sources` names it. Each source also gets the window its own cadence needs from one
+clock reading: arXiv widens to at least a week because it announces on weekdays only, while X,
+Hacker News and GitHub use the days you asked for. Every leg's resolved window is reported back
+under `sources`.
+
+A successful GitHub leg also reports `total_matching` and `incomplete_results` in its entry under
+`sources`, so a reader can see when the results are only a sample. A topic containing a `created:`,
+`is:` or `type:` qualifier is refused by GitHub alone. The refusal appears in GitHub's `errors`, and
+the other sources still run.
 
 The tool schemas carry the constraints the server actually enforces — `mode` and `sort` expose
-their enums, `sources` exposes `["x","hn","arxiv"]`, and the integer parameters expose their ranges.
+their enums, `sources` exposes `["x","hn","arxiv","github"]`, and the integer parameters expose their ranges.
 A model can see what will be rejected instead of discovering it by being rejected.
 
 Handled failures come back **inside** a successful response as
@@ -385,7 +440,7 @@ podcast path publishes `no_transcript_found`, `audio_unavailable`, `audio_too_la
 `transcription_failed`, `transcription_timeout`, `whisper_unavailable`, and `request_failed`.
 
 **`source_backend` says which backend produced an item.** Every source sets it — `hn-api`,
-`arxiv-api`, `x-api`, and `publisher` or `whisper` for a podcast transcript. A consumer that
+`arxiv-api`, `github-api`, `x-api`, and `publisher` or `whisper` for a podcast transcript. A consumer that
 cannot tell a machine-made transcript from a published one will repeat its mangled names and
 version numbers as fact, cited to the episode.
 

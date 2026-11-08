@@ -615,3 +615,42 @@ a deletion rather than an untangling. A test covers it.
 `net_razor_yt_transcript`, `net_razor_yt_mark_processed`) in its YouTube Catch-up
 graph, which could not work against this build. ORIS deleted that specialist;
 confirmed 2026-09-08.
+
+### R7 · GitHub issue search — ✅ **shipped 2026-09-19**
+
+`net_razor_github_search` over GitHub's `/search/issues` endpoint. Issues and
+pull requests, windowed, normalized like every other source.
+
+**Repository search was considered and dropped.** A general web search for
+`"term" site:github.com` answers "what projects exist for X" about as well, and
+a repository has no author-written prose, no meaningful `published_at` for the
+thing you care about, and stars that a caller would be tempted to rank by.
+Issues are different: the API gives real created timestamps, so the window can
+be pushed upstream, plus comment and reaction counts that map onto
+`EvidenceEngagement` without inventing anything. Code search was dropped for the
+same reason as repositories, more strongly — a matched file fragment has no
+author and no date at all.
+
+**Verified against the live docs before building, not from memory.** Legacy
+issue search was removed on 2025-09-04 and advanced search is now the default,
+so the `advanced_search` parameter is not passed. One syntax consequence worth
+knowing: a space between two `repo:` or `org:` qualifiers now means AND where it
+used to mean OR. `created:` accepts a full ISO timestamp with timezone, which is
+what lets the resolved window go upstream rather than being filtered locally.
+
+**Joined the `research` fan-out on 2026-11-08, only when named.** It was first
+kept out as a scope decision. ORIS's "Search all" page needs all four sources
+through one tool, so a caller can now name `github`. It stays out of the default,
+because callers that leave `sources` out must keep getting the same answers. See
+`ARCHITECTURE.md` §"The rules", rule 5.
+
+**Not built, deliberately:** no request pacing. arXiv paces itself because a
+burst there earned a 429 within two requests, observed. Nothing equivalent has
+been observed here, one tool call makes one request, and a spent rate limit
+comes back as a `rate_limited` error the caller can act on. Add pacing if that
+turns out to be optimistic.
+
+One classification detail that needed care: GitHub answers a spent rate limit
+with 403, the same status as a genuine refusal. The source checks
+`x-ratelimit-remaining` before deciding, so "wait a minute" is never reported as
+"stop trying".

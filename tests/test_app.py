@@ -259,3 +259,220 @@ async def test_a_wide_research_window_is_not_narrowed_for_arxiv(make_app):
     await app.research(ResearchRequest(topic="agents", sources=["arxiv"], days=30))
 
     assert (FIXED_NOW - arxiv.calls[0][1].since).days == 30
+
+
+@pytest.mark.asyncio
+async def test_a_github_search_is_audited_like_every_other_source(make_app, store):
+    """Rule 2: nothing reaches a source unaudited. A new source that bypassed
+    AuditRecorder.call would still return results and leave no trail."""
+    from net_razor.models import GitHubRequest
+
+    app = make_app(github=RecordingSource("github", FetchResult.empty({"source": "github"})))
+
+    response = await app.github_search(GitHubRequest(query="mcp auth"))
+
+    assert store.get_call(response["call_id"])["call"]["tool"] == "github_search"
+    assert response["source"] == "github"
+
+
+@pytest.mark.asyncio
+async def test_the_github_source_receives_a_resolved_window_it_never_asked_for(
+    make_app, clock
+):
+    """Rule 3: wall-clock time enters at resolve_window and nowhere else."""
+    from net_razor.models import GitHubRequest
+
+    github = RecordingSource("github", FetchResult.empty({}))
+    app = make_app(github=github)
+
+    await app.github_search(GitHubRequest(query="agents", days=3))
+
+    _request, window = github.calls[0]
+    assert window.since == clock.now() - timedelta(days=3)
+
+
+@pytest.mark.asyncio
+async def test_github_is_registered_as_a_source_even_though_research_refuses_it(make_app):
+    """It is kept out of the fan-out by the request model, not by being absent
+    from the registry -- so the registry stays the one place a source lives."""
+    app = make_app()
+
+    assert "github" in app.sources
+    assert app.sources["github"].label == "GitHub"
+
+
+# --------------------------------------------------------------------------- #
+# GitHub in the research fan-out
+# --------------------------------------------------------------------------- #
+def _github_result(*, total: int = 812, incomplete: bool = True) -> FetchResult:
+    item = EvidenceItem(
+        source="github", source_backend="github-api", source_id="org/repo#7",
+        canonical_url="https://github.com/org/repo/issues/7", title="A bug",
+        text="org/repo#7 (open)\nA bug",
+        author=EvidenceAuthor(handle="alice", display_name="alice"),
+        published_at=datetime(2026, 7, 1, tzinfo=UTC), query_used="agents",
+    )
+    return FetchResult(
+        items=[item], raw={"org/repo#7": {"number": 7}}, errors=[],
+        effective_request={"source": "github", "query": "agents"},
+        meta={"total_matching": total, "incomplete_results": incomplete},
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_runs_github_when_named(make_app):
+    github = RecordingSource("github", _github_result())
+    app = make_app(github=github)
+
+    response = await app.research(ResearchRequest(topic="agents", sources=["hn", "github"]))
+
+    assert len(github.calls) == 1
+    assert [item["source_id"] for item in response["results"]["github"]] == ["org/repo#7"]
+    assert response["sources"]["github"]["items_found"] == 1
+    assert response["sources"]["github"]["window"] == github.calls[0][1].as_dict()
+
+
+@pytest.mark.asyncio
+async def test_research_does_not_run_github_by_default(make_app):
+    """ORIS's answers would change if GitHub joined the default."""
+    github = RecordingSource("github", _github_result())
+    app = make_app(github=github)
+
+    response = await app.research(ResearchRequest(topic="agents"))
+
+    assert github.calls == []
+    assert "github" not in response["results"]
+    assert "github" not in response["sources"]
+
+
+@pytest.mark.asyncio
+async def test_the_github_leg_is_audited_under_the_research_call(make_app):
+    app = make_app(github=RecordingSource("github", _github_result()))
+
+    response = await app.research(ResearchRequest(topic="agents", sources=["github"]))
+
+    leg = app.run_detail(response["sources"]["github"]["call_id"])["call"]
+    assert leg["tool"] == "github_search"
+    assert leg["parent_id"] == response["call_id"]
+
+
+@pytest.mark.asyncio
+async def test_the_github_leg_uses_the_days_it_is_given(make_app):
+    """GitHub's own tool defaults to a week. That default must not widen a fan-out
+    leg the way arXiv widens itself."""
+    github, hn = RecordingSource("github", _github_result()), RecordingSource("hn", _hn_result())
+    app = make_app(github=github, hn=hn)
+
+    await app.research(ResearchRequest(topic="agents", sources=["hn", "github"], days=2))
+
+    github_request, github_window = github.calls[0]
+    assert github_request.days == 2
+    assert github_window == hn.calls[0][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(RuntimeError("boom"), id="leg-raises"),
+        pytest.param(
+            FetchResult(
+                items=[], raw={}, effective_request={"source": "github"},
+                errors=[ServiceErrorItem(type="rate_limited", message="slow down")],
+            ),
+            id="rate-limited",
+        ),
+    ],
+)
+async def test_a_github_failure_leaves_the_other_sources_intact(make_app, failure):
+    app = make_app(
+        github=RecordingSource("github", failure),
+        hn=RecordingSource("hn", _hn_result()),
+    )
+
+    response = await app.research(ResearchRequest(topic="agents", sources=["hn", "github"]))
+
+    assert response["results"]["hn"], "expected Hacker News to still return"
+    assert response["sources"]["hn"]["errors"] == []
+    assert response["results"]["github"] == []
+    assert response["sources"]["github"]["errors"]
+    assert any("GitHub" in caveat for caveat in response["caveats"])
+    assert app.runs()["runs"][-1]["status"] == "completed_with_errors"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topic", ["created:>2026-01-01 agents", "agents is:open"])
+async def test_a_topic_github_refuses_leaves_the_other_sources_intact(make_app, topic):
+    """GitHub refuses some qualifiers that X and Hacker News accept as plain text.
+
+    The leg's request is built before the fan-out starts, so a refusal there
+    must not abort the whole call.
+    """
+    github, hn = RecordingSource("github", _github_result()), RecordingSource("hn", _hn_result())
+    app = make_app(github=github, hn=hn)
+
+    response = await app.research(ResearchRequest(topic=topic, sources=["hn", "github"]))
+
+    assert github.calls == []
+    assert response["results"]["hn"], "expected Hacker News to still return"
+    assert response["results"]["github"] == []
+    summary = response["sources"]["github"]
+    assert summary["call_id"] is None
+    assert summary["window"] == hn.calls[0][1].as_dict()
+    [error] = summary["errors"]
+    assert error["retriable"] is False, "the same topic will be refused again"
+    assert any("GitHub" in caveat for caveat in response["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_research_survives_every_named_source_refusing_the_topic(make_app):
+    app = make_app()
+
+    response = await app.research(
+        ResearchRequest(topic="created:>2026-01-01 agents", sources=["github"])
+    )
+
+    assert response["results"] == {"github": []}
+    assert response["sources"]["github"]["errors"]
+
+
+@pytest.mark.asyncio
+async def test_github_reports_whether_its_results_are_a_sample(make_app):
+    app = make_app(github=RecordingSource("github", _github_result()))
+
+    response = await app.research(ResearchRequest(topic="agents", sources=["github"]))
+
+    assert response["sources"]["github"]["total_matching"] == 812
+    assert response["sources"]["github"]["incomplete_results"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_github_search_does_not_report_a_match_count(make_app):
+    """Absent, not zero: a failed search does not know how many issues match."""
+    failed = FetchResult(
+        items=[], raw={}, effective_request={"source": "github"},
+        errors=[ServiceErrorItem(type="rate_limited", message="slow down")],
+    )
+    app = make_app(github=RecordingSource("github", failed))
+
+    response = await app.research(ResearchRequest(topic="agents", sources=["github"]))
+
+    assert "total_matching" not in response["sources"]["github"]
+    assert "incomplete_results" not in response["sources"]["github"]
+
+
+@pytest.mark.asyncio
+async def test_the_default_sources_keep_their_existing_summary_shape(make_app):
+    """arXiv also knows a match count. Publishing it here would change the response
+    every default research caller already reads."""
+    arxiv_result = FetchResult(
+        items=[], raw={}, errors=[], effective_request={}, meta={"total_matching": 99}
+    )
+    app = make_app(arxiv=RecordingSource("arxiv", arxiv_result))
+
+    response = await app.research(ResearchRequest(topic="agents"))
+
+    for name in ("x", "hn", "arxiv"):
+        assert set(response["sources"][name]) == {
+            "queried", "items_found", "call_id", "window", "errors",
+        }

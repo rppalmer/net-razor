@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -11,7 +12,9 @@ from net_razor.models import (
     EvidenceAuthor,
     EvidenceItem,
     FetchResult,
+    GitHubRequest,
     ResearchRequest,
+    SourceName,
     XRequest,
 )
 from tests.conftest import RecordingSource
@@ -24,6 +27,7 @@ EXPECTED_TOOLS = {
     "net_razor_x_search",
     "net_razor_arxiv_search",
     "net_razor_hn_search",
+    "net_razor_github_search",
     "net_razor_podcast_feeds",
     "net_razor_podcast_new_episodes",
     "net_razor_podcast_transcript",
@@ -89,10 +93,10 @@ async def test_mcp_hn_search_routes_through_app(make_app):
             id="blank-topic",
         ),
         pytest.param(
-            "net_razor_research",
-            {"topic": "agents", "sources": ["podcast"]},
-            lambda: ResearchRequest(topic="agents", sources=["podcast"]),
-            id="podcast-has-no-topic-search",
+            "net_razor_github_search",
+            {"query": "created:>2026-01-01 agents"},
+            lambda: GitHubRequest(query="created:>2026-01-01 agents"),
+            id="github-window-is-not-the-callers-to-set",
         ),
     ],
 )
@@ -256,3 +260,113 @@ def test_no_tool_body_closes_over_the_unresolved_app_parameter():
         if "await app." in line or "return app." in line
     ]
     assert offenders == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_github_search_routes_through_app(make_app):
+    """The adapter carries no logic, so the only thing worth proving about it is
+    that the tool reaches App and the call is audited like any other."""
+    app = make_app(
+        github=RecordingSource(
+            "github",
+            FetchResult(
+                items=[], raw={}, errors=[], effective_request={},
+                meta={"total_matching": 0, "incomplete_results": False},
+            ),
+        )
+    )
+    server = create_server(app)
+
+    await server.call_tool("net_razor_github_search", {"query": "mcp auth"})
+
+    assert app.runs()["runs"][0]["tool"] == "github_search"
+
+
+# --------------------------------------------------------------------------- #
+# GitHub through net_razor_research
+# --------------------------------------------------------------------------- #
+def _github_search_result() -> FetchResult:
+    return FetchResult(
+        items=[], raw={}, errors=[], effective_request={"source": "github"},
+        meta={"total_matching": 812, "incomplete_results": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_schema_lists_exactly_the_sources_it_can_run(make_app):
+    """The enum is what a model reads, so it must match what the server accepts."""
+    server = create_server(make_app())
+    tool = next(t for t in await server.list_tools() if t.name == "net_razor_research")
+
+    array = next(
+        branch for branch in tool.input_schema["properties"]["sources"]["anyOf"]
+        if branch.get("type") == "array"
+    )
+
+    def accepted(name: str) -> bool:
+        try:
+            ResearchRequest(topic="agents", sources=[name])
+        except ValidationError:
+            return False
+        return True
+
+    assert set(array["items"]["enum"]) == {n for n in get_args(SourceName) if accepted(n)}
+    assert "github" in array["items"]["enum"]
+
+
+@pytest.mark.asyncio
+async def test_research_refuses_podcast_before_reaching_a_source(make_app):
+    podcast = RecordingSource("podcast", FetchResult.empty({}))
+    server = create_server(make_app(podcast=podcast))
+
+    with pytest.raises(Exception):  # noqa: B017 -- the SDK's own rejection type
+        await server.call_tool(
+            "net_razor_research", {"topic": "agents", "sources": ["podcast"]}
+        )
+
+    assert podcast.calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_research_does_not_run_github_when_sources_is_left_out(make_app):
+    github = RecordingSource("github", _github_search_result())
+    server = create_server(make_app(github=github))
+
+    await server.call_tool("net_razor_research", {"topic": "agents"})
+
+    assert github.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_github_search_is_the_same_search_through_either_tool(make_app):
+    """Same request and same window, or the two tools would find different things."""
+    github = RecordingSource("github", _github_search_result())
+    server = create_server(make_app(github=github))
+
+    await server.call_tool(
+        "net_razor_github_search", {"query": "agents", "days": 3, "max_results": 50}
+    )
+    await server.call_tool(
+        "net_razor_research",
+        {"topic": "agents", "days": 3, "max_results_per_source": 50, "sources": ["github"]},
+    )
+
+    (direct_request, direct_window), (leg_request, leg_window) = github.calls
+    assert leg_request == direct_request
+    assert leg_window == direct_window
+
+
+@pytest.mark.asyncio
+async def test_github_sample_fields_reach_the_caller(make_app):
+    """The server rebuilds the response from its declared model, so an undeclared
+    field would be lost here even though App returned it."""
+    server = create_server(make_app(github=RecordingSource("github", _github_search_result())))
+
+    result = await server.call_tool(
+        "net_razor_research", {"topic": "agents", "sources": ["github", "hn"]}
+    )
+
+    summaries = result.structured_content["sources"]
+    assert summaries["github"]["total_matching"] == 812
+    assert summaries["github"]["incomplete_results"] is True
+    assert "total_matching" not in summaries["hn"]

@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     ct0: SecretStr | None = None
     node_binary: str = "node"
 
+    # GitHub. Optional: search works unauthenticated at 10 requests a minute,
+    # and a token raises that to 30. Nothing else about the source changes.
+    github_token: SecretStr | None = None
+
     # podcasts
     podcasts_file: Path = _HOME_ROOT / "podcasts.txt"
     podcast_max_transcript_chars: int = Field(default=12000, ge=1000)
@@ -108,6 +112,10 @@ class Settings(BaseSettings):
     @property
     def ct0_value(self) -> str | None:
         return self._secret(self.ct0)
+
+    @property
+    def github_token_value(self) -> str | None:
+        return self._secret(self.github_token)
 
     @property
     def x_credentials_configured(self) -> bool:
